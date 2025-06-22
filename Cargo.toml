@@ -11,6 +11,8 @@ license = "MIT OR Apache-2.0"
 publish = false
 
 [dependencies]
+anyhow = "1.0.98"
+pico-args = { version = "0.5.0", features = ["eq-separator"] }
 
 [lints.rust]
 async_fn_in_trait = "allow"
