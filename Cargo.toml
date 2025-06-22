@@ -40,3 +40,7 @@ doc_markdown = { level = "allow", priority = 1 }
 module_name_repetitions = { level = "allow", priority = 1 }
 should_panic_without_expect = { level = "allow", priority = 1 }
 pedantic = "warn"
+
+[profile.release]
+lto = "thin"
+strip = true
