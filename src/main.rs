@@ -1,8 +1,12 @@
 use anyhow::{Context, Error, Result, bail};
+use nix::sys::signal::{Signal, kill};
+use nix::unistd::Pid;
 use pico_args::Arguments;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, exit};
+use std::thread::sleep;
+use std::time::Duration;
 
 fn main() -> Result<()> {
     let mut args = Arguments::from_env();
@@ -51,9 +55,37 @@ fn main() -> Result<()> {
     // Run game using Wine
     start_game(&game_exe_path).context("failed to start game")?;
 
+    let game_pid = get_game_pid().context("failed to query game process ID")?;
+
+    // Terminate game process when receiving termination signal
+    ctrlc::set_handler(move || {
+        println!("\nReceived termination signal, attempting graceful shutdown...");
+
+        let _ = kill(game_pid, Signal::SIGTERM);
+
+        // Give process some time to shut down gracefully
+        sleep(Duration::from_secs(2));
+
+        match kill(game_pid, Signal::SIGKILL) {
+            // `kill()` returns ESRCH if process was already terminated
+            // Reference: https://pubs.opengroup.org/onlinepubs/9799919799/functions/kill.html
+            Ok(()) | Err(nix::Error::ESRCH) => println!("Terminated game process"),
+            Err(e) => {
+                let error = Error::new(e)
+                    .context(format!("failed to terminate game process (pid {game_pid})"));
+                eprintln!("{error}");
+            }
+        }
+
+        exit(128);
+    })
+    .context("failed to set up termination signal handler")?;
+
     Ok(())
 }
 
+/// Runs the game executable at the provided path using Wine.
+/// This function returns an error if running the `wine` command was unsuccessful.
 fn start_game(exe_path: &Path) -> Result<()> {
     let status = Command::new("wine")
         .arg(exe_path)
@@ -80,4 +112,47 @@ fn start_game(exe_path: &Path) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Finds the ID of the game process.
+/// Returns an error if:
+/// - running the `pgrep` command was unsuccessful
+/// - parsing `pgrep` output was unsuccessful
+/// - no processes matching the game name were found
+/// - multiple processes matching the game name were found
+fn get_game_pid() -> Result<Pid> {
+    let output = Command::new("pgrep")
+        .arg("th15.exe")
+        .output()
+        .map_err(|e| {
+            let not_found = e.kind() == ErrorKind::NotFound;
+            let err = Error::new(e);
+            if not_found {
+                err.context("pgrep command not found")
+            } else {
+                err
+            }
+        })?;
+
+    if !output.status.success() {
+        match output.status.code() {
+            Some(1) => bail!("no game process found"),
+            Some(code) => bail!("pgrep failed with status code {code}"),
+            None => bail!("pgrep was terminated by a signal"),
+        }
+    }
+
+    let pids: Vec<i32> = String::from_utf8(output.stdout)
+        .context("pgrep output is not valid UTF-8")?
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(str::parse)
+        .collect::<Result<_, _>>()
+        .context("failed to parse pgrep output as i32 values")?;
+
+    match pids.len() {
+        0 => bail!("no game process found"),
+        1 => Ok(Pid::from_raw(pids[0])),
+        _ => bail!("multiple game processes found"),
+    }
 }
