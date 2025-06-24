@@ -6,7 +6,8 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::{Command, exit};
 use std::thread::sleep;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+use tap::Pipe;
 
 fn main() -> Result<()> {
     let mut args = Arguments::from_env();
@@ -61,20 +62,50 @@ fn main() -> Result<()> {
     ctrlc::set_handler(move || {
         println!("\nReceived termination signal, attempting graceful shutdown...");
 
+        let elapsed = match get_process_duration(game_pid)
+            .with_context(|| format!("failed to query game process information (pid {game_pid})"))
+        {
+            Ok(value) => value,
+            Err(e) => {
+                eprintln!("{e}");
+                return;
+            }
+        };
+
         let _ = kill(game_pid, Signal::SIGTERM);
 
-        // Give process some time to shut down gracefully
-        sleep(Duration::from_secs(2));
+        let process_path = PathBuf::from(format!("/proc/{game_pid}"));
 
-        match kill(game_pid, Signal::SIGKILL) {
-            // `kill()` returns ESRCH if process was already terminated
-            // Reference: https://pubs.opengroup.org/onlinepubs/9799919799/functions/kill.html
-            Ok(()) | Err(nix::Error::ESRCH) => println!("Terminated game process"),
-            Err(e) => {
-                let error = Error::new(e)
-                    .context(format!("failed to terminate game process (pid {game_pid})"));
-                eprintln!("{error}");
+        // Poll for process termination
+        let start = Instant::now();
+        while start.elapsed() < const { Duration::from_secs(2) } {
+            sleep(const { Duration::from_millis(100) });
+            if !process_path.exists() {
+                println!("Terminated game process");
+                return;
             }
+        }
+
+        match get_process_duration(game_pid)
+            .with_context(|| format!("failed to query game process information (pid {game_pid})"))
+        {
+            // Send SIGKILL if the game process' PID still refers to the game process
+            Ok(current_elapsed) if current_elapsed >= elapsed => {
+                match kill(game_pid, Signal::SIGKILL) {
+                    // `kill()` returns ESRCH if process was already terminated
+                    // Reference: https://pubs.opengroup.org/onlinepubs/9799919799/functions/kill.html
+                    Ok(()) | Err(nix::Error::ESRCH) => println!("Terminated game process"),
+                    Err(e) => {
+                        let error = Error::new(e)
+                            .context(format!("failed to terminate game process (pid {game_pid})"));
+                        eprintln!("{error}");
+                    }
+                }
+            }
+            // `get_process_duration()` could fail if the process was terminated
+            // between now and the last `process_path.exists()` check
+            Err(e) if process_path.exists() => eprintln!("{e}"),
+            _ => (),
         }
 
         exit(128);
@@ -82,6 +113,21 @@ fn main() -> Result<()> {
     .context("failed to set up termination signal handler")?;
 
     Ok(())
+}
+
+/// Adds context to the result of running a command if the result is `Err(_)`.
+/// A specific message is included if the command was not found.
+fn add_command_context<T>(res: std::io::Result<T>, command_name: &str) -> Result<T> {
+    res.map_err(|e| {
+        let not_found = e.kind() == ErrorKind::NotFound;
+        let err = Error::new(e);
+        if not_found {
+            err.context(format!("{command_name} command not found"))
+        } else {
+            err
+        }
+    })
+    .with_context(|| format!("failed to run {command_name} command"))
 }
 
 /// Runs the game executable at the provided path using Wine.
@@ -94,15 +140,7 @@ fn start_game(exe_path: &Path) -> Result<()> {
         .env("WINEESYNC", "1") // Enable esync optimization
         .env("STAGING_SHARED_MEMORY", "1") // Use shared memory to optimize wineserver calls
         .status()
-        .map_err(|e| {
-            let not_found = e.kind() == ErrorKind::NotFound;
-            let err = Error::new(e);
-            if not_found {
-                err.context("wine command not found")
-            } else {
-                err
-            }
-        })?;
+        .pipe(|res| add_command_context(res, "wine"))?;
 
     if !status.success() {
         match status.code() {
@@ -124,15 +162,7 @@ fn get_game_pid() -> Result<Pid> {
     let output = Command::new("pgrep")
         .arg("th15.exe")
         .output()
-        .map_err(|e| {
-            let not_found = e.kind() == ErrorKind::NotFound;
-            let err = Error::new(e);
-            if not_found {
-                err.context("pgrep command not found")
-            } else {
-                err
-            }
-        })?;
+        .pipe(|res| add_command_context(res, "pgrep"))?;
 
     if !output.status.success() {
         match output.status.code() {
@@ -143,7 +173,7 @@ fn get_game_pid() -> Result<Pid> {
     }
 
     let pids: Vec<i32> = String::from_utf8(output.stdout)
-        .context("pgrep output is not valid UTF-8")?
+        .context("pgrep output was not valid UTF-8")?
         .lines()
         .filter(|line| !line.is_empty())
         .map(str::parse)
@@ -155,4 +185,28 @@ fn get_game_pid() -> Result<Pid> {
         1 => Ok(Pid::from_raw(pids[0])),
         _ => bail!("multiple game processes found"),
     }
+}
+
+/// Returns the duration of time that the process with the specified PID has been alive for.
+/// The returned value is in seconds.
+fn get_process_duration(pid: Pid) -> Result<usize> {
+    let output = Command::new("ps")
+        .args(["-o", "etimes=", "-p", &pid.as_raw().to_string()])
+        .output()
+        .pipe(|res| add_command_context(res, "ps"))?;
+
+    if !output.status.success() {
+        match output.status.code() {
+            Some(code) => bail!("ps failed with status code {code}"),
+            None => bail!("ps was terminated by a signal"),
+        }
+    }
+
+    output
+        .stdout
+        .pipe(String::from_utf8)
+        .context("ps output was not valid UTF-8")?
+        .trim()
+        .parse::<usize>()
+        .context("failed to parse ps output as usize value")
 }
