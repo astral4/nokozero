@@ -88,14 +88,7 @@ fn main() -> Result<()> {
         if now.duration_since(last_read) >= frame_duration {
             match reader.get_state() {
                 Ok(Some(state)) => {
-                    println!(
-                        "position: ({}, {}), hitbox radius: {}, is focused: {}, items: {:?}",
-                        state.player.pos_x,
-                        state.player.pos_y,
-                        state.player.hitbox_radius,
-                        state.player.is_focused,
-                        state.items,
-                    );
+                    println!("bullets: {:#?}", state.bullets);
                 }
                 Ok(None) => {}
                 Err(e) => {

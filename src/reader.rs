@@ -3,12 +3,14 @@ use nix::errno::Errno;
 use nix::unistd::Pid;
 use std::fs::read_to_string;
 use std::io::IoSliceMut;
-use std::ops::IndexMut;
 use tap::Pipe;
 use zerocopy::{FromBytes, Immutable, KnownLayout};
 
 #[cfg(target_os = "linux")]
 use nix::sys::uio::{RemoteIoVec, process_vm_readv};
+
+const WORLD_WIDTH: f32 = 384.;
+const WORLD_HEIGHT: f32 = 448.;
 
 // Offsets/locations for certain data in process memory
 const PLAYER_PTR: usize = 0xe9bb8;
@@ -16,9 +18,18 @@ const PLAYER_POS: usize = 0x618;
 const PLAYER_IS_FOCUSED: usize = 0x16240;
 const PLAYER_HITBOX_RADIUS: usize = 0x2bfc8;
 
+const BULLETS_PTR: usize = 0xe9a6c;
+const BULLETS_LIST: usize = 0x68;
+const BULLETS_CAP: usize = 2000;
+const BULLET_NEXT_PTR: usize = 0x4;
+const BULLET_POS: usize = 0xc38;
+const BULLET_VEL: usize = 0xc44;
+const BULLET_HITBOX_RADIUS: usize = 0xc58;
+const BULLET_STATE: usize = 0xc8a;
+
 const ITEMS_PTR: usize = 0xe9a9c;
 const ITEMS_ARRAY: usize = 0x0;
-const ITEMS_ARRAY_LEN: usize = 0x1258;
+const ITEMS_CAP: usize = 0x1258;
 const ITEM_STATE: usize = 0xc74;
 const ITEM_TYPE: usize = 0xc78;
 const ITEM_POS: usize = 0xc30;
@@ -29,14 +40,17 @@ const ITEM_BYTE_LEN: usize = 0xc88;
 pub struct StateReader {
     pid: Pid,
     base_addr: usize,
-    ptrs: GameData<2>,
+    ptrs: GameData<3>,
     player_data: GameData<3>,
-    items_data: [GameData<4>; ITEMS_ARRAY_LEN],
+    bullet_ptrs: GameData<2>,
+    bullet_data: GameData<4>,
+    item_data: GameData<4>,
 }
 
 #[derive(Debug)]
 pub struct GameState {
     pub player: PlayerState,
+    pub bullets: Vec<BulletState>,
     pub items: Vec<ItemState>,
 }
 
@@ -46,6 +60,15 @@ pub struct PlayerState {
     pub pos_y: f32,
     pub hitbox_radius: f32,
     pub is_focused: bool,
+}
+
+#[derive(Debug)]
+pub struct BulletState {
+    pub pos_x: f32,
+    pub pos_y: f32,
+    pub vel_x: f32,
+    pub vel_y: f32,
+    pub hitbox_radius: f32,
 }
 
 #[derive(Debug)]
@@ -81,18 +104,20 @@ impl StateReader {
             .pipe(|addr| usize::from_str_radix(addr, 16))
             .with_context(|| format!("failed to parse base address from {maps_path:?}"))?;
 
-        let ptrs = GameData::new([4, 4]);
-
+        let ptrs = GameData::new([4, 4, 4]);
         let player_data = GameData::new([8, 4, 4]);
-
-        let items_data = std::array::from_fn(|_| GameData::new([4, 4, 8, 8]));
+        let bullet_ptrs = GameData::new([4, 4]);
+        let bullet_data = GameData::new([8, 8, 4, 2]);
+        let item_data = GameData::new([4, 4, 8, 8]);
 
         Ok(Self {
             pid,
             base_addr,
             ptrs,
             player_data,
-            items_data,
+            bullet_ptrs,
+            bullet_data,
+            item_data,
         })
     }
 
@@ -106,38 +131,112 @@ impl StateReader {
         #[rustfmt::skip]
         let ptr_locations = [
             RemoteIoVec { base: self.base_addr + PLAYER_PTR, len: 4 },
+            RemoteIoVec { base: self.base_addr + BULLETS_PTR, len: 4 },
             RemoteIoVec { base: self.base_addr + ITEMS_PTR, len: 4 },
         ];
 
         read(self.pid, self.ptrs.as_io_slices_mut(), &ptr_locations)?;
 
         let player_ptr = *self.ptrs.get::<u32>(0) as usize;
-        let items_ptr = *self.ptrs.get::<u32>(1) as usize;
+        let bullets_ptr = *self.ptrs.get::<u32>(1) as usize;
+        let items_ptr = *self.ptrs.get::<u32>(2) as usize;
 
-        if player_ptr == 0 || items_ptr == 0 {
+        if player_ptr == 0 || bullets_ptr == 0 || items_ptr == 0 {
             return Ok(None);
         }
 
         // Read player data
-        #[rustfmt::skip]
-        let locations = [
-            RemoteIoVec { base: player_ptr + PLAYER_POS, len: 8 },
-            RemoteIoVec { base: player_ptr + PLAYER_IS_FOCUSED, len: 4 },
-            RemoteIoVec { base: player_ptr + PLAYER_HITBOX_RADIUS, len: 4 },
-        ];
+        let player = {
+            #[rustfmt::skip]
+            let locations = [
+                RemoteIoVec { base: player_ptr + PLAYER_POS, len: 8 },
+                RemoteIoVec { base: player_ptr + PLAYER_IS_FOCUSED, len: 4 },
+                RemoteIoVec { base: player_ptr + PLAYER_HITBOX_RADIUS, len: 4 },
+            ];
 
-        read(self.pid, self.player_data.as_io_slices_mut(), &locations)?;
+            read(self.pid, self.player_data.as_io_slices_mut(), &locations)?;
 
-        let pos: &[f32; 2] = self.player_data.get(0);
-        let is_focused = self.player_data.get::<u32>(1) == &1;
-        let hitbox_radius = *self.player_data.get(2);
+            let player_pos: &[f32; 2] = self.player_data.get(0);
+            let is_focused = self.player_data.get::<u32>(1) == &1;
+            let hitbox_radius = *self.player_data.get(2);
+
+            PlayerState {
+                pos_x: player_pos[0],
+                pos_y: player_pos[1],
+                hitbox_radius,
+                is_focused,
+            }
+        };
+
+        // Read bullets data
+        let mut bullets = Vec::new();
+        let mut bullet_next_ptr = bullets_ptr + BULLETS_LIST;
+
+        for _ in 0..BULLETS_CAP {
+            #[rustfmt::skip]
+            let ptr_locations = [
+                RemoteIoVec { base: bullet_next_ptr, len: 4 },
+                RemoteIoVec { base: bullet_next_ptr + BULLET_NEXT_PTR, len: 4 },
+            ];
+
+            read(
+                self.pid,
+                self.bullet_ptrs.as_io_slices_mut(),
+                &ptr_locations,
+            )?;
+
+            let bullet_data_ptr = *self.bullet_ptrs.get::<u32>(0) as usize;
+            bullet_next_ptr = *self.bullet_ptrs.get::<u32>(1) as usize;
+
+            if bullet_data_ptr == 0 {
+                if bullet_next_ptr == 0 {
+                    break;
+                }
+                continue;
+            }
+
+            #[rustfmt::skip]
+            let locations = [
+                RemoteIoVec { base: bullet_data_ptr + BULLET_POS, len: 8 },
+                RemoteIoVec { base: bullet_data_ptr + BULLET_VEL, len: 8 },
+                RemoteIoVec { base: bullet_data_ptr + BULLET_HITBOX_RADIUS, len: 4 },
+                RemoteIoVec { base: bullet_data_ptr + BULLET_STATE, len: 2 }
+            ];
+
+            read(self.pid, self.bullet_data.as_io_slices_mut(), &locations)?;
+
+            // Check if bullet state is active
+            if self.bullet_data.get::<u16>(3) == &1 {
+                let &[pos_x, pos_y] = self.bullet_data.get(0);
+                let hitbox_radius: f32 = *self.bullet_data.get(2);
+
+                // Check if bullet is in bounds
+                if pos_y >= -hitbox_radius
+                    && pos_y <= WORLD_HEIGHT + hitbox_radius
+                    && pos_x >= const { -WORLD_WIDTH / 2. } - hitbox_radius
+                    && pos_x <= const { WORLD_WIDTH / 2. } + hitbox_radius
+                {
+                    let bullet_vel: &[f32; 2] = self.bullet_data.get(1);
+
+                    bullets.push(BulletState {
+                        pos_x,
+                        pos_y,
+                        vel_x: bullet_vel[0],
+                        vel_y: bullet_vel[1],
+                        hitbox_radius,
+                    });
+                }
+            }
+
+            if bullet_next_ptr == 0 {
+                break;
+            }
+        }
 
         // Read items data
         let mut items = Vec::new();
 
-        for i in 0..ITEMS_ARRAY_LEN {
-            let item_data = self.items_data.index_mut(i);
-
+        for i in 0..ITEMS_CAP {
             let item_base = items_ptr + ITEMS_ARRAY + i * ITEM_BYTE_LEN;
 
             #[rustfmt::skip]
@@ -148,16 +247,16 @@ impl StateReader {
                 RemoteIoVec { base: item_base + ITEM_VEL, len: 8 },
             ];
 
-            read(self.pid, item_data.as_io_slices_mut(), &locations)?;
+            read(self.pid, self.item_data.as_io_slices_mut(), &locations)?;
 
             // Check if item state is active
-            if item_data.get::<u32>(0) == &0 {
+            if self.item_data.get::<u32>(0) == &0 {
                 continue;
             }
 
-            let item_type = *item_data.get(1);
-            let item_pos: &[f32; 2] = item_data.get(2);
-            let item_vel: &[f32; 2] = item_data.get(3);
+            let item_type = *self.item_data.get(1);
+            let item_pos: &[f32; 2] = self.item_data.get(2);
+            let item_vel: &[f32; 2] = self.item_data.get(3);
 
             items.push(ItemState {
                 item_type,
@@ -169,12 +268,8 @@ impl StateReader {
         }
 
         Ok(Some(GameState {
-            player: PlayerState {
-                pos_x: pos[0],
-                pos_y: pos[1],
-                hitbox_radius,
-                is_focused,
-            },
+            player,
+            bullets,
             items,
         }))
     }
