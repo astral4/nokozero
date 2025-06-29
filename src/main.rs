@@ -89,16 +89,17 @@ fn main() -> Result<()> {
             match reader.get_state() {
                 Ok(Some(state)) => {
                     println!(
-                        "position: ({}, {}), hitbox radius: {}, is focused: {}",
+                        "position: ({}, {}), hitbox radius: {}, is focused: {}, items: {:?}",
                         state.player.pos_x,
                         state.player.pos_y,
                         state.player.hitbox_radius,
-                        state.player.is_focused
+                        state.player.is_focused,
+                        state.items,
                     );
                 }
                 Ok(None) => {}
                 Err(e) => {
-                    eprintln!("Failed to read game state: {e}");
+                    eprintln!("Failed to read game state: {e:?}");
                     if get_game_pid().is_err() {
                         println!("Game process terminated");
                         break;

@@ -3,6 +3,7 @@ use nix::errno::Errno;
 use nix::unistd::Pid;
 use std::fs::read_to_string;
 use std::io::IoSliceMut;
+use std::ops::IndexMut;
 use tap::Pipe;
 use zerocopy::{FromBytes, Immutable, KnownLayout};
 
@@ -15,17 +16,28 @@ const PLAYER_POS: usize = 0x618;
 const PLAYER_IS_FOCUSED: usize = 0x16240;
 const PLAYER_HITBOX_RADIUS: usize = 0x2bfc8;
 
+const ITEMS_PTR: usize = 0xe9a9c;
+const ITEMS_ARRAY: usize = 0x0;
+const ITEMS_ARRAY_LEN: usize = 0x1258;
+const ITEM_STATE: usize = 0xc74;
+const ITEM_TYPE: usize = 0xc78;
+const ITEM_POS: usize = 0xc30;
+const ITEM_VEL: usize = 0xc3c;
+const ITEM_BYTE_LEN: usize = 0xc88;
+
 #[derive(Debug)]
 pub struct StateReader {
     pid: Pid,
     base_addr: usize,
-    ptrs: GameData<1>,
-    data: GameData<3>,
+    ptrs: GameData<2>,
+    player_data: GameData<3>,
+    items_data: [GameData<4>; ITEMS_ARRAY_LEN],
 }
 
 #[derive(Debug)]
 pub struct GameState {
     pub player: PlayerState,
+    pub items: Vec<ItemState>,
 }
 
 #[derive(Debug)]
@@ -34,6 +46,15 @@ pub struct PlayerState {
     pub pos_y: f32,
     pub hitbox_radius: f32,
     pub is_focused: bool,
+}
+
+#[derive(Debug)]
+pub struct ItemState {
+    pub item_type: u32,
+    pub pos_x: f32,
+    pub pos_y: f32,
+    pub vel_x: f32,
+    pub vel_y: f32,
 }
 
 impl StateReader {
@@ -60,15 +81,18 @@ impl StateReader {
             .pipe(|addr| usize::from_str_radix(addr, 16))
             .with_context(|| format!("failed to parse base address from {maps_path:?}"))?;
 
-        let ptrs = GameData::new([4]);
+        let ptrs = GameData::new([4, 4]);
 
-        let data = GameData::new([8, 4, 4]);
+        let player_data = GameData::new([8, 4, 4]);
+
+        let items_data = std::array::from_fn(|_| GameData::new([4, 4, 8, 8]));
 
         Ok(Self {
             pid,
             base_addr,
             ptrs,
-            data,
+            player_data,
+            items_data,
         })
     }
 
@@ -81,17 +105,20 @@ impl StateReader {
     pub fn get_state(&mut self) -> Result<Option<GameState>> {
         #[rustfmt::skip]
         let ptr_locations = [
-            RemoteIoVec { base: self.base_addr + PLAYER_PTR, len: 4 }
+            RemoteIoVec { base: self.base_addr + PLAYER_PTR, len: 4 },
+            RemoteIoVec { base: self.base_addr + ITEMS_PTR, len: 4 },
         ];
 
         read(self.pid, self.ptrs.as_io_slices_mut(), &ptr_locations)?;
 
         let player_ptr = *self.ptrs.get::<u32>(0) as usize;
+        let items_ptr = *self.ptrs.get::<u32>(1) as usize;
 
-        if player_ptr == 0 {
+        if player_ptr == 0 || items_ptr == 0 {
             return Ok(None);
         }
 
+        // Read player data
         #[rustfmt::skip]
         let locations = [
             RemoteIoVec { base: player_ptr + PLAYER_POS, len: 8 },
@@ -99,11 +126,47 @@ impl StateReader {
             RemoteIoVec { base: player_ptr + PLAYER_HITBOX_RADIUS, len: 4 },
         ];
 
-        read(self.pid, self.data.as_io_slices_mut(), &locations)?;
+        read(self.pid, self.player_data.as_io_slices_mut(), &locations)?;
 
-        let pos: &[f32; 2] = self.data.get(0);
-        let is_focused = self.data.get::<u32>(1) == &1;
-        let hitbox_radius = *self.data.get(2);
+        let pos: &[f32; 2] = self.player_data.get(0);
+        let is_focused = self.player_data.get::<u32>(1) == &1;
+        let hitbox_radius = *self.player_data.get(2);
+
+        // Read items data
+        let mut items = Vec::new();
+
+        for i in 0..ITEMS_ARRAY_LEN {
+            let item_data = self.items_data.index_mut(i);
+
+            let item_base = items_ptr + ITEMS_ARRAY + i * ITEM_BYTE_LEN;
+
+            #[rustfmt::skip]
+            let locations = [
+                RemoteIoVec { base: item_base + ITEM_STATE, len: 4 },
+                RemoteIoVec { base: item_base + ITEM_TYPE, len: 4 },
+                RemoteIoVec { base: item_base + ITEM_POS, len: 8 },
+                RemoteIoVec { base: item_base + ITEM_VEL, len: 8 },
+            ];
+
+            read(self.pid, item_data.as_io_slices_mut(), &locations)?;
+
+            // Check if item state is active
+            if item_data.get::<u32>(0) == &0 {
+                continue;
+            }
+
+            let item_type = *item_data.get(1);
+            let item_pos: &[f32; 2] = item_data.get(2);
+            let item_vel: &[f32; 2] = item_data.get(3);
+
+            items.push(ItemState {
+                item_type,
+                pos_x: item_pos[0],
+                pos_y: item_pos[1],
+                vel_x: item_vel[0],
+                vel_y: item_vel[1],
+            });
+        }
 
         Ok(Some(GameState {
             player: PlayerState {
@@ -112,6 +175,7 @@ impl StateReader {
                 hitbox_radius,
                 is_focused,
             },
+            items,
         }))
     }
 
@@ -138,17 +202,12 @@ impl<const N: usize> GameData<N> {
     fn new(sizes: [usize; N]) -> Self {
         let mut buffers = sizes.map(|size| vec![0u8; size]);
 
-        let io_slices = buffers
-            .iter_mut()
-            .map(|buf| unsafe {
-                // SAFETY: We're creating IoSliceMut with 'static lifetime, but we ensure
-                // `buffers` lives at least as long as `io_slices` by storing them together in the GameData struct.
-                // Also, the struct fields are ordered so that `io_slices` is dropped before `buffers`.
-                IoSliceMut::new(std::slice::from_raw_parts_mut(buf.as_mut_ptr(), buf.len()))
-            })
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let io_slices = buffers.each_mut().map(|buf| unsafe {
+            // SAFETY: We're creating IoSliceMut with 'static lifetime, but we ensure
+            // `buffers` lives at least as long as `io_slices` by storing them together in the GameData struct.
+            // Also, the struct fields are ordered so that `io_slices` is dropped before `buffers`.
+            IoSliceMut::new(std::slice::from_raw_parts_mut(buf.as_mut_ptr(), buf.len()))
+        });
 
         Self { io_slices, buffers }
     }
@@ -169,21 +228,18 @@ impl<const N: usize> GameData<N> {
 #[cfg(target_os = "linux")]
 fn read(pid: Pid, buffers: &mut [IoSliceMut<'_>], locations: &[RemoteIoVec]) -> Result<()> {
     if let Err(errno) = process_vm_readv(pid, buffers, locations) {
-        let err = match errno {
-            Errno::EFAULT => Some(anyhow!(
+        return Err(match errno {
+            Errno::EFAULT => anyhow!(
                 "a memory location is out of bounds for the game process"
-            )),
-            Errno::EPERM => Some(anyhow!(
+            ),
+            Errno::EINVAL => anyhow!("length of data to be read is too large"),
+            Errno::ENOMEM => anyhow!("fatal error (out of memory)"),
+            Errno::EPERM => anyhow!(
                 "this program does not have permission to access the address space of the game process"
-            )),
-            Errno::ESRCH => Some(anyhow!("no process with PID {pid} exists")),
-            _ => None,
-        };
-
-        return Err(match err {
-            Some(e) => e.context("failed to read game process memory"),
-            None => anyhow!("failed to read game process memory"),
-        });
+            ),
+            Errno::ESRCH => anyhow!("no process with PID {pid} exists"),
+            _ => anyhow!("unknown error (errno {errno}"),
+        }.context("failed to read game process memory"));
     }
 
     Ok(())
