@@ -1,9 +1,16 @@
 use anyhow::{Context, Error, Result, bail};
 use nix::unistd::Pid;
+use nokozero::reader::StateReader;
 use pico_args::Arguments;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+use std::thread::sleep;
+use std::time::{Duration, Instant};
 use tap::Pipe;
 
 fn main() -> Result<()> {
@@ -54,6 +61,58 @@ fn main() -> Result<()> {
     start_game(&game_exe_path).context("failed to start game")?;
 
     let game_pid = get_game_pid().context("failed to query game process ID")?;
+    println!("Found game process with PID {game_pid}");
+
+    // Set up graceful shutdown
+    let is_running = Arc::new(AtomicBool::new(true));
+    let r = is_running.clone();
+
+    ctrlc::set_handler(move || {
+        println!("\nReceived Ctrl+C, shutting down...");
+        r.store(false, Ordering::Relaxed);
+    })
+    .context("failed to set Ctrl+C handler")?;
+
+    // Create game state reader
+    let mut reader = StateReader::new(game_pid).context("failed to create game state reader")?;
+
+    // Main game loop - read state every 6 frames
+    let frame_duration = Duration::from_millis(100);
+    let mut last_read = Instant::now();
+
+    println!("Starting game state monitoring");
+
+    while is_running.load(Ordering::Relaxed) {
+        let now = Instant::now();
+
+        if now.duration_since(last_read) >= frame_duration {
+            match reader.get_state() {
+                Ok(Some(state)) => {
+                    println!(
+                        "position: ({}, {}), hitbox radius: {}, is focused: {}",
+                        state.player.pos_x,
+                        state.player.pos_y,
+                        state.player.hitbox_radius,
+                        state.player.is_focused
+                    );
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    eprintln!("Failed to read game state: {e}");
+                    if get_game_pid().is_err() {
+                        println!("Game process terminated");
+                        break;
+                    }
+                }
+            }
+
+            last_read = now;
+        }
+
+        sleep(Duration::from_millis(10));
+    }
+
+    println!("Shutdown complete");
 
     Ok(())
 }
