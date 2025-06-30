@@ -158,13 +158,13 @@ impl StateReader {
 
             read(self.pid, self.player_data.as_io_slices_mut(), &locations)?;
 
-            let player_pos: &[f32; 2] = self.player_data.get(0);
+            let &[pos_x, pos_y] = self.player_data.get(0);
             let is_focused = self.player_data.get::<u32>(1) == &1;
             let hitbox_radius = *self.player_data.get(2);
 
             PlayerState {
-                pos_x: player_pos[0],
-                pos_y: player_pos[1],
+                pos_x,
+                pos_y,
                 hitbox_radius,
                 is_focused,
             }
@@ -218,13 +218,13 @@ impl StateReader {
                     && pos_x >= const { -WORLD_WIDTH / 2. } - hitbox_radius
                     && pos_x <= const { WORLD_WIDTH / 2. } + hitbox_radius
                 {
-                    let bullet_vel: &[f32; 2] = self.bullet_data.get(1);
+                    let &[vel_x, vel_y] = self.bullet_data.get(1);
 
                     bullets.push(BulletState {
                         pos_x,
                         pos_y,
-                        vel_x: bullet_vel[0],
-                        vel_y: bullet_vel[1],
+                        vel_x,
+                        vel_y,
                         hitbox_radius,
                     });
                 }
@@ -257,15 +257,15 @@ impl StateReader {
             }
 
             let item_type = *self.item_data.get(1);
-            let item_pos: &[f32; 2] = self.item_data.get(2);
-            let item_vel: &[f32; 2] = self.item_data.get(3);
+            let &[pos_x, pos_y] = self.item_data.get(2);
+            let &[vel_x, vel_y] = self.item_data.get(3);
 
             items.push(ItemState {
                 item_type,
-                pos_x: item_pos[0],
-                pos_y: item_pos[1],
-                vel_x: item_vel[0],
-                vel_y: item_vel[1],
+                pos_x,
+                pos_y,
+                vel_x,
+                vel_y,
             });
         }
 
