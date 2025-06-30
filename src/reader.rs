@@ -20,21 +20,23 @@ const PLAYER_HITBOX_RADIUS: usize = 0x2bfc8;
 
 const BULLETS_PTR: usize = 0xe9a6c;
 const BULLETS_LIST: usize = 0x68;
-const BULLETS_CAP: usize = 2000;
 const BULLET_NEXT_PTR: usize = 0x4;
 const BULLET_POS: usize = 0xc38;
 const BULLET_VEL: usize = 0xc44;
 const BULLET_HITBOX_RADIUS: usize = 0xc58;
 const BULLET_STATE: usize = 0xc8a;
+// Reference: https://exphp.github.io/thpages/#/mods/bullet-cap
+const BULLETS_CAP: usize = 2000;
 
 const ITEMS_PTR: usize = 0xe9a9c;
 const ITEMS_ARRAY: usize = 0x0;
-const ITEMS_CAP: usize = 0x1258;
 const ITEM_STATE: usize = 0xc74;
 const ITEM_TYPE: usize = 0xc78;
 const ITEM_POS: usize = 0xc30;
 const ITEM_VEL: usize = 0xc3c;
 const ITEM_BYTE_LEN: usize = 0xc88;
+// Reference: https://github.com/exphp-share/th-re-data/blob/41cd633354f3bbc4ff11b3d315ef7243c990f227/data/th15.v1.00b/type-structs-own.json#L1025
+const ITEMS_CAP: usize = 600;
 
 #[derive(Debug)]
 pub struct StateReader {
