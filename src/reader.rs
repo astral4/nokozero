@@ -106,20 +106,14 @@ impl StateReader {
             .pipe(|addr| usize::from_str_radix(addr, 16))
             .with_context(|| format!("failed to parse base address from {maps_path:?}"))?;
 
-        let ptrs = GameData::new([4, 4, 4]);
-        let player_data = GameData::new([8, 4, 4]);
-        let bullet_ptrs = GameData::new([4, 4]);
-        let bullet_data = GameData::new([8, 8, 4, 2]);
-        let item_data = GameData::new([4, 4, 8, 8]);
-
         Ok(Self {
             pid,
             base_addr,
-            ptrs,
-            player_data,
-            bullet_ptrs,
-            bullet_data,
-            item_data,
+            ptrs: GameData::new([4, 4, 4]),
+            player_data: GameData::new([8, 4, 4]),
+            bullet_ptrs: GameData::new([4, 4]),
+            bullet_data: GameData::new([8, 8, 4, 2]),
+            item_data: GameData::new([4, 4, 8, 8]),
         })
     }
 
