@@ -117,8 +117,7 @@ impl StateReader {
         })
     }
 
-    /// Gets the current game state, including:
-    /// - player position, focus state, and hitbox radius
+    /// Gets the current state of the game, including the player, bullets, and items.
     ///
     /// # Errors
     /// This function returns an error if the game process memory could not be read.
@@ -141,30 +140,46 @@ impl StateReader {
             return Ok(None);
         }
 
-        // Read player data
-        let player = {
-            #[rustfmt::skip]
+        Ok(Some(GameState {
+            player: self.get_player_state(player_ptr)?,
+            bullets: self.get_bullets_state(bullets_ptr)?,
+            items: self.get_items_state(items_ptr)?,
+        }))
+    }
+
+    /// Gets the current state of the player.
+    ///
+    /// # Errors
+    /// This function returns an error if the game process memory could not be read.
+    #[cfg(target_os = "linux")]
+    fn get_player_state(&mut self, player_ptr: usize) -> Result<PlayerState> {
+        #[rustfmt::skip]
             let locations = [
                 RemoteIoVec { base: player_ptr + PLAYER_POS, len: 8 },
                 RemoteIoVec { base: player_ptr + PLAYER_IS_FOCUSED, len: 4 },
                 RemoteIoVec { base: player_ptr + PLAYER_HITBOX_RADIUS, len: 4 },
             ];
 
-            read(self.pid, self.player_data.as_io_slices_mut(), &locations)?;
+        read(self.pid, self.player_data.as_io_slices_mut(), &locations)?;
 
-            let &[pos_x, pos_y] = self.player_data.get(0);
-            let is_focused = self.player_data.get::<u32>(1) == &1;
-            let hitbox_radius = *self.player_data.get(2);
+        let &[pos_x, pos_y] = self.player_data.get(0);
+        let is_focused = self.player_data.get::<u32>(1) == &1;
+        let hitbox_radius = *self.player_data.get(2);
 
-            PlayerState {
-                pos_x,
-                pos_y,
-                hitbox_radius,
-                is_focused,
-            }
-        };
+        Ok(PlayerState {
+            pos_x,
+            pos_y,
+            hitbox_radius,
+            is_focused,
+        })
+    }
 
-        // Read bullets data
+    /// Gets the current state of all bullets on the playing field.
+    ///
+    /// # Errors
+    /// This function returns an error if the game process memory could not be read.
+    #[cfg(target_os = "linux")]
+    fn get_bullets_state(&mut self, bullets_ptr: usize) -> Result<Vec<BulletState>> {
         let mut bullets = Vec::new();
         let mut bullet_next_ptr = bullets_ptr + BULLETS_LIST;
 
@@ -229,6 +244,15 @@ impl StateReader {
             }
         }
 
+        Ok(bullets)
+    }
+
+    /// Gets the current state of all items on the playing field.
+    ///
+    /// # Errors
+    /// This function returns an error if the game process memory could not be read.
+    #[cfg(target_os = "linux")]
+    fn get_items_state(&mut self, items_ptr: usize) -> Result<Vec<ItemState>> {
         // Read items data
         let mut items = Vec::new();
 
@@ -263,14 +287,10 @@ impl StateReader {
             });
         }
 
-        Ok(Some(GameState {
-            player,
-            bullets,
-            items,
-        }))
+        Ok(items)
     }
 
-    /// Gets the current game state.
+    /// Gets the current state of the game, including the player, bullets, and items.
     /// This function is currently unimplemented on non-Linux platforms and will panic when invoked.
     #[cfg(not(target_os = "linux"))]
     #[allow(clippy::missing_errors_doc)]
