@@ -28,6 +28,18 @@ const BULLET_STATE: usize = 0xc8a;
 // Reference: https://exphp.github.io/thpages/#/mods/bullet-cap
 const BULLETS_CAP: usize = 2000;
 
+const ENEMIES_PTR: usize = 0xe9a80;
+const ENEMIES_LIST_PTR: usize = 0x180;
+const ENEMY_NEXT_PTR: usize = 0x4;
+const ENEMY_POS: usize = 0x120c + 0x44;
+const ENEMY_VEL: usize = 0x120c + 0x78;
+const ENEMY_HITBOX_RADIUS: usize = 0x120c + 0x118;
+const ENEMY_ANM_VM_ID: usize = 0x120c + 0x124;
+const ENEMY_HP: usize = 0x120c + 0x3f74;
+const ENEMY_MAX_HP: usize = 0x120c + 0x3f78;
+const ENEMY_FLAGS: usize = 0x120c + 0x4060;
+const ENEMY_BOSS_FLAG: u32 = 1 << 23;
+
 const ITEMS_PTR: usize = 0xe9a9c;
 const ITEMS_ARRAY: usize = 0x0;
 const ITEM_STATE: usize = 0xc74;
@@ -42,21 +54,24 @@ const ITEMS_CAP: usize = 600;
 pub struct StateReader {
     pid: Pid,
     base_addr: usize,
-    ptrs: GameData<3>,
+    ptrs: GameData<4>,
     player_data: GameData<3>,
     bullet_ptrs: GameData<2>,
     bullet_data: GameData<4>,
+    enemy_ptrs: GameData<2>,
+    enemy_data: GameData<7>,
     item_data: GameData<4>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct GameState {
     pub player: PlayerState,
     pub bullets: Vec<BulletState>,
+    pub enemies: Vec<EnemyState>,
     pub items: Vec<ItemState>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct PlayerState {
     pub pos_x: f32,
     pub pos_y: f32,
@@ -64,7 +79,7 @@ pub struct PlayerState {
     pub is_focused: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct BulletState {
     pub pos_x: f32,
     pub pos_y: f32,
@@ -73,7 +88,18 @@ pub struct BulletState {
     pub hitbox_radius: f32,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
+pub struct EnemyState {
+    pub pos_x: f32,
+    pub pos_y: f32,
+    pub vel_x: f32,
+    pub vel_y: f32,
+    pub hitbox_radius: f32,
+    pub hp_ratio: f32,
+    pub is_boss: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
 pub struct ItemState {
     pub item_type: u32,
     pub pos_x: f32,
@@ -109,10 +135,12 @@ impl StateReader {
         Ok(Self {
             pid,
             base_addr,
-            ptrs: GameData::new([4, 4, 4]),
+            ptrs: GameData::new([4, 4, 4, 4]),
             player_data: GameData::new([8, 4, 4]),
             bullet_ptrs: GameData::new([4, 4]),
             bullet_data: GameData::new([8, 8, 4, 2]),
+            enemy_ptrs: GameData::new([4, 4]),
+            enemy_data: GameData::new([8, 8, 4, 4, 4, 4, 4]),
             item_data: GameData::new([4, 4, 8, 8]),
         })
     }
@@ -127,6 +155,7 @@ impl StateReader {
         let ptr_locations = [
             RemoteIoVec { base: self.base_addr + PLAYER_PTR, len: 4 },
             RemoteIoVec { base: self.base_addr + BULLETS_PTR, len: 4 },
+            RemoteIoVec { base: self.base_addr + ENEMIES_PTR, len: 4 },
             RemoteIoVec { base: self.base_addr + ITEMS_PTR, len: 4 },
         ];
 
@@ -134,15 +163,17 @@ impl StateReader {
 
         let player_ptr = *self.ptrs.get::<u32>(0) as usize;
         let bullets_ptr = *self.ptrs.get::<u32>(1) as usize;
-        let items_ptr = *self.ptrs.get::<u32>(2) as usize;
+        let enemies_ptr = *self.ptrs.get::<u32>(2) as usize;
+        let items_ptr = *self.ptrs.get::<u32>(3) as usize;
 
-        if player_ptr == 0 || bullets_ptr == 0 || items_ptr == 0 {
+        if player_ptr == 0 || bullets_ptr == 0 || enemies_ptr == 0 || items_ptr == 0 {
             return Ok(None);
         }
 
         Ok(Some(GameState {
             player: self.get_player_state(player_ptr)?,
             bullets: self.get_bullets_state(bullets_ptr)?,
+            enemies: self.get_enemies_state(enemies_ptr)?,
             items: self.get_items_state(items_ptr)?,
         }))
     }
@@ -154,11 +185,11 @@ impl StateReader {
     #[cfg(target_os = "linux")]
     fn get_player_state(&mut self, player_ptr: usize) -> Result<PlayerState> {
         #[rustfmt::skip]
-            let locations = [
-                RemoteIoVec { base: player_ptr + PLAYER_POS, len: 8 },
-                RemoteIoVec { base: player_ptr + PLAYER_IS_FOCUSED, len: 4 },
-                RemoteIoVec { base: player_ptr + PLAYER_HITBOX_RADIUS, len: 4 },
-            ];
+        let locations = [
+            RemoteIoVec { base: player_ptr + PLAYER_POS, len: 8 },
+            RemoteIoVec { base: player_ptr + PLAYER_IS_FOCUSED, len: 4 },
+            RemoteIoVec { base: player_ptr + PLAYER_HITBOX_RADIUS, len: 4 },
+        ];
 
         read(self.pid, self.player_data.as_io_slices_mut(), &locations)?;
 
@@ -211,7 +242,7 @@ impl StateReader {
                 RemoteIoVec { base: bullet_data_ptr + BULLET_POS, len: 8 },
                 RemoteIoVec { base: bullet_data_ptr + BULLET_VEL, len: 8 },
                 RemoteIoVec { base: bullet_data_ptr + BULLET_HITBOX_RADIUS, len: 4 },
-                RemoteIoVec { base: bullet_data_ptr + BULLET_STATE, len: 2 }
+                RemoteIoVec { base: bullet_data_ptr + BULLET_STATE, len: 2 },
             ];
 
             read(self.pid, self.bullet_data.as_io_slices_mut(), &locations)?;
@@ -245,6 +276,89 @@ impl StateReader {
         }
 
         Ok(bullets)
+    }
+
+    /// Gets the current state of all enemies on the playing field.
+    ///
+    /// # Errors
+    /// This function returns an error if the game process memory could not be read.
+    #[cfg(target_os = "linux")]
+    fn get_enemies_state(&mut self, enemies_ptr: usize) -> Result<Vec<EnemyState>> {
+        let mut enemies = Vec::new();
+
+        // Get the pointer to the head of the linked list of enemies
+        let mut enemy_next_ptr = {
+            let mut list_head_ptr_buf = [0u8; 4];
+
+            #[rustfmt::skip]
+            read(
+                self.pid,
+                &mut [IoSliceMut::new(&mut list_head_ptr_buf)],
+                &[RemoteIoVec { base: enemies_ptr + ENEMIES_LIST_PTR, len: 4 }],
+            )?;
+
+            u32::from_le_bytes(list_head_ptr_buf) as usize
+        };
+
+        while enemy_next_ptr != 0 {
+            #[rustfmt::skip]
+            let ptr_locations = [
+                RemoteIoVec { base: enemy_next_ptr, len: 4 },
+                RemoteIoVec { base: enemy_next_ptr + ENEMY_NEXT_PTR, len: 4 },
+            ];
+
+            read(self.pid, self.enemy_ptrs.as_io_slices_mut(), &ptr_locations)?;
+
+            let enemy_data_ptr = *self.enemy_ptrs.get::<u32>(0) as usize;
+            enemy_next_ptr = *self.enemy_ptrs.get::<u32>(1) as usize;
+
+            if enemy_data_ptr == 0 {
+                continue;
+            }
+
+            #[rustfmt::skip]
+            let locations = [
+                RemoteIoVec { base: enemy_data_ptr + ENEMY_POS, len: 8 },
+                RemoteIoVec { base: enemy_data_ptr + ENEMY_VEL, len: 8 },
+                RemoteIoVec { base: enemy_data_ptr + ENEMY_HITBOX_RADIUS, len: 4 },
+                RemoteIoVec { base: enemy_data_ptr + ENEMY_ANM_VM_ID, len: 4 },
+                RemoteIoVec { base: enemy_data_ptr + ENEMY_HP, len: 4 },
+                RemoteIoVec { base: enemy_data_ptr + ENEMY_MAX_HP, len: 4 },
+                RemoteIoVec { base: enemy_data_ptr + ENEMY_FLAGS, len: 4 },
+            ];
+
+            read(self.pid, self.enemy_data.as_io_slices_mut(), &locations)?;
+
+            // Check if the enemy is a boss
+            let is_boss = self.enemy_data.get::<u32>(6) & ENEMY_BOSS_FLAG != 0;
+
+            // Check if the enemy is "real"; i.e. is a boss or has an ANM VM ID set.
+            // Sometimes, there are list entries that simply exist to make bullet patterns easier to implement,
+            // so they should not be counted as logically distinct entities.
+            if is_boss || (self.enemy_data.get::<u32>(3) != &0) {
+                let &[pos_x, pos_y] = self.enemy_data.get(0);
+                let &[vel_x, vel_y] = self.enemy_data.get(1);
+                let hitbox_radius: f32 = *self.enemy_data.get(2);
+                #[allow(clippy::cast_precision_loss)]
+                let hp_ratio = {
+                    let hp = *self.enemy_data.get::<i32>(4) as f32;
+                    let max_hp = *self.enemy_data.get::<i32>(5) as f32;
+                    (hp / max_hp).clamp(0., 1.)
+                };
+
+                enemies.push(EnemyState {
+                    pos_x,
+                    pos_y,
+                    vel_x,
+                    vel_y,
+                    hitbox_radius,
+                    hp_ratio,
+                    is_boss,
+                });
+            }
+        }
+
+        Ok(enemies)
     }
 
     /// Gets the current state of all items on the playing field.
