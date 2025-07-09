@@ -13,11 +13,6 @@ const WORLD_WIDTH: f32 = 384.;
 const WORLD_HEIGHT: f32 = 448.;
 
 // Offsets/locations for certain data in process memory
-const PLAYER_PTR: usize = 0xe9bb8;
-const PLAYER_POS: usize = 0x618;
-const PLAYER_IS_FOCUSED: usize = 0x16240;
-const PLAYER_HITBOX_RADIUS: usize = 0x2bfc8;
-
 const BULLETS_PTR: usize = 0xe9a6c;
 const BULLETS_LIST: usize = 0x68;
 const BULLET_NEXT_PTR: usize = 0x4;
@@ -25,8 +20,6 @@ const BULLET_POS: usize = 0xc38;
 const BULLET_VEL: usize = 0xc44;
 const BULLET_HITBOX_RADIUS: usize = 0xc58;
 const BULLET_STATE: usize = 0xc8a;
-// Reference: https://exphp.github.io/thpages/#/mods/bullet-cap
-const BULLETS_CAP: usize = 2000;
 
 const ENEMIES_PTR: usize = 0xe9a80;
 const ENEMIES_LIST_PTR: usize = 0x180;
@@ -42,41 +35,38 @@ const ENEMY_BOSS_FLAG: u32 = 1 << 23;
 
 const ITEMS_PTR: usize = 0xe9a9c;
 const ITEMS_ARRAY: usize = 0x0;
-const ITEM_STATE: usize = 0xc74;
-const ITEM_TYPE: usize = 0xc78;
 const ITEM_POS: usize = 0xc30;
 const ITEM_VEL: usize = 0xc3c;
+const ITEM_STATE: usize = 0xc74;
+const ITEM_TYPE: usize = 0xc78;
 const ITEM_BYTE_LEN: usize = 0xc88;
 // Reference: https://github.com/exphp-share/th-re-data/blob/41cd633354f3bbc4ff11b3d315ef7243c990f227/data/th15.v1.00b/type-structs-own.json#L1025
 const ITEMS_CAP: usize = 600;
+
+const PLAYER_PTR: usize = 0xe9bb8;
+const PLAYER_POS: usize = 0x618;
+const PLAYER_IS_FOCUSED: usize = 0x16240;
+const PLAYER_HITBOX_RADIUS: usize = 0x2bfc8;
 
 #[derive(Debug)]
 pub struct StateReader {
     pid: Pid,
     base_addr: usize,
     ptrs: GameData<4>,
-    player_data: GameData<3>,
     bullet_ptrs: GameData<2>,
     bullet_data: GameData<4>,
     enemy_ptrs: GameData<2>,
     enemy_data: GameData<7>,
     item_data: GameData<4>,
+    player_data: GameData<3>,
 }
 
 #[derive(Debug, Clone)]
 pub struct GameState {
-    pub player: PlayerState,
     pub bullets: Vec<BulletState>,
     pub enemies: Vec<EnemyState>,
     pub items: Vec<ItemState>,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct PlayerState {
-    pub pos_x: f32,
-    pub pos_y: f32,
-    pub hitbox_radius: f32,
-    pub is_focused: bool,
+    pub player: PlayerState,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -101,11 +91,19 @@ pub struct EnemyState {
 
 #[derive(Debug, Clone, Copy)]
 pub struct ItemState {
-    pub item_type: u32,
     pub pos_x: f32,
     pub pos_y: f32,
     pub vel_x: f32,
     pub vel_y: f32,
+    pub item_type: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct PlayerState {
+    pub pos_x: f32,
+    pub pos_y: f32,
+    pub is_focused: bool,
+    pub hitbox_radius: f32,
 }
 
 impl StateReader {
@@ -136,12 +134,12 @@ impl StateReader {
             pid,
             base_addr,
             ptrs: GameData::new([4, 4, 4, 4]),
-            player_data: GameData::new([8, 4, 4]),
             bullet_ptrs: GameData::new([4, 4]),
             bullet_data: GameData::new([8, 8, 4, 2]),
             enemy_ptrs: GameData::new([4, 4]),
             enemy_data: GameData::new([8, 8, 4, 4, 4, 4, 4]),
-            item_data: GameData::new([4, 4, 8, 8]),
+            item_data: GameData::new([8, 8, 4, 4]),
+            player_data: GameData::new([8, 4, 4]),
         })
     }
 
@@ -153,56 +151,29 @@ impl StateReader {
     pub fn get_state(&mut self) -> Result<Option<GameState>> {
         #[rustfmt::skip]
         let ptr_locations = [
-            RemoteIoVec { base: self.base_addr + PLAYER_PTR, len: 4 },
             RemoteIoVec { base: self.base_addr + BULLETS_PTR, len: 4 },
             RemoteIoVec { base: self.base_addr + ENEMIES_PTR, len: 4 },
             RemoteIoVec { base: self.base_addr + ITEMS_PTR, len: 4 },
+            RemoteIoVec { base: self.base_addr + PLAYER_PTR, len: 4 },
         ];
 
         read(self.pid, self.ptrs.as_io_slices_mut(), &ptr_locations)?;
 
-        let player_ptr = *self.ptrs.get::<u32>(0) as usize;
-        let bullets_ptr = *self.ptrs.get::<u32>(1) as usize;
-        let enemies_ptr = *self.ptrs.get::<u32>(2) as usize;
-        let items_ptr = *self.ptrs.get::<u32>(3) as usize;
+        let bullets_ptr = *self.ptrs.get::<u32>(0) as usize;
+        let enemies_ptr = *self.ptrs.get::<u32>(1) as usize;
+        let items_ptr = *self.ptrs.get::<u32>(2) as usize;
+        let player_ptr = *self.ptrs.get::<u32>(3) as usize;
 
-        if player_ptr == 0 || bullets_ptr == 0 || enemies_ptr == 0 || items_ptr == 0 {
+        if bullets_ptr == 0 || enemies_ptr == 0 || items_ptr == 0 || player_ptr == 0 {
             return Ok(None);
         }
 
         Ok(Some(GameState {
-            player: self.get_player_state(player_ptr)?,
             bullets: self.get_bullets_state(bullets_ptr)?,
             enemies: self.get_enemies_state(enemies_ptr)?,
             items: self.get_items_state(items_ptr)?,
+            player: self.get_player_state(player_ptr)?,
         }))
-    }
-
-    /// Gets the current state of the player.
-    ///
-    /// # Errors
-    /// This function returns an error if the game process memory could not be read.
-    #[cfg(target_os = "linux")]
-    fn get_player_state(&mut self, player_ptr: usize) -> Result<PlayerState> {
-        #[rustfmt::skip]
-        let locations = [
-            RemoteIoVec { base: player_ptr + PLAYER_POS, len: 8 },
-            RemoteIoVec { base: player_ptr + PLAYER_IS_FOCUSED, len: 4 },
-            RemoteIoVec { base: player_ptr + PLAYER_HITBOX_RADIUS, len: 4 },
-        ];
-
-        read(self.pid, self.player_data.as_io_slices_mut(), &locations)?;
-
-        let &[pos_x, pos_y] = self.player_data.get(0);
-        let is_focused = self.player_data.get::<u32>(1) == &1;
-        let hitbox_radius = *self.player_data.get(2);
-
-        Ok(PlayerState {
-            pos_x,
-            pos_y,
-            hitbox_radius,
-            is_focused,
-        })
     }
 
     /// Gets the current state of all bullets on the playing field.
@@ -212,9 +183,10 @@ impl StateReader {
     #[cfg(target_os = "linux")]
     fn get_bullets_state(&mut self, bullets_ptr: usize) -> Result<Vec<BulletState>> {
         let mut bullets = Vec::new();
+
         let mut bullet_next_ptr = bullets_ptr + BULLETS_LIST;
 
-        for _ in 0..BULLETS_CAP {
+        while bullet_next_ptr != 0 {
             #[rustfmt::skip]
             let ptr_locations = [
                 RemoteIoVec { base: bullet_next_ptr, len: 4 },
@@ -231,9 +203,6 @@ impl StateReader {
             bullet_next_ptr = *self.bullet_ptrs.get::<u32>(1) as usize;
 
             if bullet_data_ptr == 0 {
-                if bullet_next_ptr == 0 {
-                    break;
-                }
                 continue;
             }
 
@@ -268,10 +237,6 @@ impl StateReader {
                         hitbox_radius,
                     });
                 }
-            }
-
-            if bullet_next_ptr == 0 {
-                break;
             }
         }
 
@@ -375,33 +340,58 @@ impl StateReader {
 
             #[rustfmt::skip]
             let locations = [
-                RemoteIoVec { base: item_base + ITEM_STATE, len: 4 },
-                RemoteIoVec { base: item_base + ITEM_TYPE, len: 4 },
                 RemoteIoVec { base: item_base + ITEM_POS, len: 8 },
                 RemoteIoVec { base: item_base + ITEM_VEL, len: 8 },
+                RemoteIoVec { base: item_base + ITEM_STATE, len: 4 },
+                RemoteIoVec { base: item_base + ITEM_TYPE, len: 4 },
             ];
 
             read(self.pid, self.item_data.as_io_slices_mut(), &locations)?;
 
             // Check if item state is active
-            if self.item_data.get::<u32>(0) == &0 {
-                continue;
+            if self.item_data.get::<u32>(2) != &0 {
+                let &[pos_x, pos_y] = self.item_data.get(0);
+                let &[vel_x, vel_y] = self.item_data.get(1);
+                let item_type = *self.item_data.get(3);
+
+                items.push(ItemState {
+                    pos_x,
+                    pos_y,
+                    vel_x,
+                    vel_y,
+                    item_type,
+                });
             }
-
-            let item_type = *self.item_data.get(1);
-            let &[pos_x, pos_y] = self.item_data.get(2);
-            let &[vel_x, vel_y] = self.item_data.get(3);
-
-            items.push(ItemState {
-                item_type,
-                pos_x,
-                pos_y,
-                vel_x,
-                vel_y,
-            });
         }
 
         Ok(items)
+    }
+
+    /// Gets the current state of the player.
+    ///
+    /// # Errors
+    /// This function returns an error if the game process memory could not be read.
+    #[cfg(target_os = "linux")]
+    fn get_player_state(&mut self, player_ptr: usize) -> Result<PlayerState> {
+        #[rustfmt::skip]
+        let locations = [
+            RemoteIoVec { base: player_ptr + PLAYER_POS, len: 8 },
+            RemoteIoVec { base: player_ptr + PLAYER_IS_FOCUSED, len: 4 },
+            RemoteIoVec { base: player_ptr + PLAYER_HITBOX_RADIUS, len: 4 },
+        ];
+
+        read(self.pid, self.player_data.as_io_slices_mut(), &locations)?;
+
+        let &[pos_x, pos_y] = self.player_data.get(0);
+        let is_focused = self.player_data.get::<u32>(1) == &1;
+        let hitbox_radius = *self.player_data.get(2);
+
+        Ok(PlayerState {
+            pos_x,
+            pos_y,
+            is_focused,
+            hitbox_radius,
+        })
     }
 
     /// Gets the current state of the game, including the player, bullets, and items.
