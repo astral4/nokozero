@@ -12,7 +12,7 @@ use nix::sys::uio::{RemoteIoVec, process_vm_readv};
 const WORLD_WIDTH: f32 = 384.;
 const WORLD_HEIGHT: f32 = 448.;
 
-// Offsets/locations for certain data in process memory
+// Locations and offsets for reading data in process memory
 const BULLETS_PTR: usize = 0xe9a6c;
 const BULLETS_LIST: usize = 0x68;
 const BULLET_NEXT_PTR: usize = 0x4;
@@ -22,7 +22,7 @@ const BULLET_HITBOX_RADIUS: usize = 0xc58;
 const BULLET_STATE: usize = 0xc8a;
 
 const ENEMIES_PTR: usize = 0xe9a80;
-const ENEMIES_LIST_PTR: usize = 0x180;
+const ENEMIES_LIST: usize = 0x180;
 const ENEMY_NEXT_PTR: usize = 0x4;
 const ENEMY_POS: usize = 0x120c + 0x44;
 const ENEMY_VEL: usize = 0x120c + 0x78;
@@ -222,11 +222,11 @@ impl StateReader {
     /// This function returns an error if the game process memory could not be read.
     #[cfg(target_os = "linux")]
     pub fn get_state(&mut self) -> Result<Option<GameState>> {
-        #[rustfmt::skip]
         let ptr_locations = [
             RemoteIoVec { base: self.base_addr + BULLETS_PTR, len: 4 },
             RemoteIoVec { base: self.base_addr + ENEMIES_PTR, len: 4 },
             RemoteIoVec { base: self.base_addr + ITEMS_PTR, len: 4 },
+            RemoteIoVec { base: self.base_addr + LASERS_PTR, len: 4 },
             RemoteIoVec { base: self.base_addr + PLAYER_PTR, len: 4 },
         ];
 
@@ -267,7 +267,6 @@ impl StateReader {
         let mut bullet_next_ptr = bullets_ptr + BULLETS_LIST;
 
         while bullet_next_ptr != 0 {
-            #[rustfmt::skip]
             let ptr_locations = [
                 RemoteIoVec { base: bullet_next_ptr, len: 4 },
                 RemoteIoVec { base: bullet_next_ptr + BULLET_NEXT_PTR, len: 4 },
@@ -286,7 +285,6 @@ impl StateReader {
                 continue;
             }
 
-            #[rustfmt::skip]
             let locations = [
                 RemoteIoVec { base: bullet_data_ptr + BULLET_POS, len: 8 },
                 RemoteIoVec { base: bullet_data_ptr + BULLET_VEL, len: 8 },
@@ -309,13 +307,7 @@ impl StateReader {
                 {
                     let &[vel_x, vel_y] = self.bullet_data.get(1);
 
-                    bullets.push(BulletState {
-                        pos_x,
-                        pos_y,
-                        vel_x,
-                        vel_y,
-                        hitbox_radius,
-                    });
+                    bullets.push(BulletState { pos_x, pos_y, vel_x, vel_y, hitbox_radius });
                 }
             }
         }
@@ -335,18 +327,16 @@ impl StateReader {
         let mut enemy_next_ptr = {
             let mut list_head_ptr_buf = [0u8; 4];
 
-            #[rustfmt::skip]
             read(
                 self.pid,
                 &mut [IoSliceMut::new(&mut list_head_ptr_buf)],
-                &[RemoteIoVec { base: enemies_ptr + ENEMIES_LIST_PTR, len: 4 }],
+                &[RemoteIoVec { base: enemies_ptr + ENEMIES_LIST, len: 4 }],
             )?;
 
             u32::from_le_bytes(list_head_ptr_buf) as usize
         };
 
         while enemy_next_ptr != 0 {
-            #[rustfmt::skip]
             let ptr_locations = [
                 RemoteIoVec { base: enemy_next_ptr, len: 4 },
                 RemoteIoVec { base: enemy_next_ptr + ENEMY_NEXT_PTR, len: 4 },
@@ -361,7 +351,6 @@ impl StateReader {
                 continue;
             }
 
-            #[rustfmt::skip]
             let locations = [
                 RemoteIoVec { base: enemy_data_ptr + ENEMY_POS, len: 8 },
                 RemoteIoVec { base: enemy_data_ptr + ENEMY_VEL, len: 8 },
@@ -383,7 +372,7 @@ impl StateReader {
             if is_boss || (self.enemy_data.get::<u32>(3) != &0) {
                 let &[pos_x, pos_y] = self.enemy_data.get(0);
                 let &[vel_x, vel_y] = self.enemy_data.get(1);
-                let hitbox_radius: f32 = *self.enemy_data.get(2);
+                let hitbox_radius = *self.enemy_data.get(2);
                 #[allow(clippy::cast_precision_loss)]
                 let hp_ratio = {
                     let hp = *self.enemy_data.get::<i32>(4) as f32;
@@ -418,7 +407,6 @@ impl StateReader {
         for i in 0..ITEMS_CAP {
             let item_base = items_ptr + ITEMS_ARRAY + i * ITEM_BYTE_LEN;
 
-            #[rustfmt::skip]
             let locations = [
                 RemoteIoVec { base: item_base + ITEM_POS, len: 8 },
                 RemoteIoVec { base: item_base + ITEM_VEL, len: 8 },
@@ -434,13 +422,7 @@ impl StateReader {
                 let &[vel_x, vel_y] = self.item_data.get(1);
                 let item_type = *self.item_data.get(3);
 
-                items.push(ItemState {
-                    pos_x,
-                    pos_y,
-                    vel_x,
-                    vel_y,
-                    item_type,
-                });
+                items.push(ItemState { pos_x, pos_y, vel_x, vel_y, item_type });
             }
         }
 
@@ -619,7 +601,6 @@ impl StateReader {
     /// This function returns an error if the game process memory could not be read.
     #[cfg(target_os = "linux")]
     fn get_player_state(&mut self, player_ptr: usize) -> Result<PlayerState> {
-        #[rustfmt::skip]
         let locations = [
             RemoteIoVec { base: player_ptr + PLAYER_POS, len: 8 },
             RemoteIoVec { base: player_ptr + PLAYER_IS_FOCUSED, len: 4 },
@@ -632,12 +613,7 @@ impl StateReader {
         let is_focused = self.player_data.get::<u32>(1) == &1;
         let hitbox_radius = *self.player_data.get(2);
 
-        Ok(PlayerState {
-            pos_x,
-            pos_y,
-            is_focused,
-            hitbox_radius,
-        })
+        Ok(PlayerState { pos_x, pos_y, is_focused, hitbox_radius })
     }
 
     /// Gets the current state of the game, including the player, bullets, and items.
