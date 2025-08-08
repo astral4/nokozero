@@ -72,9 +72,9 @@ pub struct StateReader {
     pid: Pid,
     base_addr: usize,
     ptrs: GameData<5>,               // managers: bullet, enemy, item, laser, player
-    bullet_ptrs: GameData<2>,        // list pointers: current, next
+    single_ptr: GameData<1>,         // single list pointer
+    list_ptrs: GameData<2>,          // pair of list pointers: current, next
     bullet_data: GameData<4>,        // pos, vel, radius, state
-    enemy_ptrs: GameData<2>,         // list pointers: current, next
     enemy_data: GameData<7>,         // pos, vel, radius, ANM VM ID, HP, max HP, flags
     item_data: GameData<4>,          // pos, vel, state, type
     base_laser_data: GameData<2>,    // type, width
@@ -82,7 +82,7 @@ pub struct StateReader {
     ray_laser_data: GameData<4>,     // pos, angle, origin vel, angular vel
     curve_laser_data: GameData<2>,   // node count, pointer to list head
     curve_laser_node_data: GameData<3>, // pos, angle, speed
-    player_data: GameData<3>,
+    player_data: GameData<3>,        // pos, focus state, radius
 }
 
 #[derive(Debug, Clone)]
@@ -202,9 +202,9 @@ impl StateReader {
             pid,
             base_addr,
             ptrs: GameData::new([4, 4, 4, 4, 4]),
-            bullet_ptrs: GameData::new([4, 4]),
+            single_ptr: GameData::new([4]),
+            list_ptrs: GameData::new([4, 4]),
             bullet_data: GameData::new([8, 8, 4, 2]),
-            enemy_ptrs: GameData::new([4, 4]),
             enemy_data: GameData::new([8, 8, 4, 4, 4, 4, 4]),
             item_data: GameData::new([8, 8, 4, 4]),
             base_laser_data: GameData::new([4, 4]),
@@ -216,7 +216,8 @@ impl StateReader {
         })
     }
 
-    /// Gets the current state of the game, including the player, bullets, and items.
+    /// Gets the current state of the game, including
+    /// the player, bullets, enemies, lasers, and items.
     ///
     /// # Errors
     /// This function returns an error if the game process memory could not be read.
@@ -272,14 +273,10 @@ impl StateReader {
                 RemoteIoVec { base: bullet_next_ptr + BULLET_NEXT_PTR, len: 4 },
             ];
 
-            read(
-                self.pid,
-                self.bullet_ptrs.as_io_slices_mut(),
-                &ptr_locations,
-            )?;
+            read(self.pid, self.list_ptrs.as_io_slices_mut(), &ptr_locations)?;
 
-            let bullet_data_ptr = *self.bullet_ptrs.get::<u32>(0) as usize;
-            bullet_next_ptr = *self.bullet_ptrs.get::<u32>(1) as usize;
+            let bullet_data_ptr = *self.list_ptrs.get::<u32>(0) as usize;
+            bullet_next_ptr = *self.list_ptrs.get::<u32>(1) as usize;
 
             if bullet_data_ptr == 0 {
                 continue;
@@ -324,17 +321,7 @@ impl StateReader {
         let mut enemies = Vec::new();
 
         // Get the pointer to the head of the linked list of enemies
-        let mut enemy_next_ptr = {
-            let mut list_head_ptr_buf = [0u8; 4];
-
-            read(
-                self.pid,
-                &mut [IoSliceMut::new(&mut list_head_ptr_buf)],
-                &[RemoteIoVec { base: enemies_ptr + ENEMIES_LIST, len: 4 }],
-            )?;
-
-            u32::from_le_bytes(list_head_ptr_buf) as usize
-        };
+        let mut enemy_next_ptr = self.read_single_ptr(enemies_ptr + ENEMIES_LIST)?;
 
         while enemy_next_ptr != 0 {
             let ptr_locations = [
@@ -342,10 +329,10 @@ impl StateReader {
                 RemoteIoVec { base: enemy_next_ptr + ENEMY_NEXT_PTR, len: 4 },
             ];
 
-            read(self.pid, self.enemy_ptrs.as_io_slices_mut(), &ptr_locations)?;
+            read(self.pid, self.list_ptrs.as_io_slices_mut(), &ptr_locations)?;
 
-            let enemy_data_ptr = *self.enemy_ptrs.get::<u32>(0) as usize;
-            enemy_next_ptr = *self.enemy_ptrs.get::<u32>(1) as usize;
+            let enemy_data_ptr = *self.list_ptrs.get::<u32>(0) as usize;
+            enemy_next_ptr = *self.list_ptrs.get::<u32>(1) as usize;
 
             if enemy_data_ptr == 0 {
                 continue;
@@ -367,7 +354,8 @@ impl StateReader {
             let is_boss = self.enemy_data.get::<u32>(6) & ENEMY_BOSS_FLAG != 0;
 
             // Check if the enemy is "real"; i.e. is a boss or has an ANM VM ID set.
-            // Sometimes, there are list entries that simply exist to make bullet patterns easier to implement,
+            // Sometimes, there are list entries that simply exist
+            // to make bullet patterns easier to implement,
             // so they should not be counted as logically distinct entities.
             if is_boss || (self.enemy_data.get::<u32>(3) != &0) {
                 let &[pos_x, pos_y] = self.enemy_data.get(0);
@@ -439,30 +427,10 @@ impl StateReader {
         let mut ray_lasers = Vec::new();
         let mut curve_lasers = Vec::new();
 
-        let mut laser_data_ptr = {
-            let mut list_head_ptr_buf = [0u8; 4];
-
-            read(
-                self.pid,
-                &mut [IoSliceMut::new(&mut list_head_ptr_buf)],
-                &[RemoteIoVec { base: lasers_ptr + LASERS_LIST, len: 4 }],
-            )?;
-
-            u32::from_le_bytes(list_head_ptr_buf) as usize
-        };
+        let mut laser_data_ptr = self.read_single_ptr(lasers_ptr + LASERS_LIST)?;
 
         loop {
-            let laser_next_ptr = {
-                let mut list_head_ptr_buf = [0u8; 4];
-
-                read(
-                    self.pid,
-                    &mut [IoSliceMut::new(&mut list_head_ptr_buf)],
-                    &[RemoteIoVec { base: laser_data_ptr + LASER_NEXT_PTR, len: 4 }],
-                )?;
-
-                u32::from_le_bytes(list_head_ptr_buf) as usize
-            };
+            let laser_next_ptr = self.read_single_ptr(laser_data_ptr + LASER_NEXT_PTR)?;
 
             if laser_next_ptr == 0 {
                 break;
@@ -616,8 +584,27 @@ impl StateReader {
         Ok(PlayerState { pos_x, pos_y, is_focused, hitbox_radius })
     }
 
-    /// Gets the current state of the game, including the player, bullets, and items.
-    /// This function is currently unimplemented on non-Linux platforms and will panic when invoked.
+    /// Utility method that reads a single `u32` at the specified offset
+    /// and interprets it as the address of a pointer.
+    ///
+    /// # Errors
+    /// This function returns an error if the game process memory could not be read.
+    #[cfg(target_os = "linux")]
+    fn read_single_ptr(&mut self, offset: usize) -> Result<usize> {
+        read(
+            self.pid,
+            self.single_ptr.as_io_slices_mut(),
+            &[RemoteIoVec { base: offset, len: 4 }],
+        )?;
+
+        Ok(*self.single_ptr.get::<u32>(0) as usize)
+    }
+
+    /// Gets the current state of the game, including
+    /// the player, bullets, enemies, lasers, and items.
+    ///
+    /// This function is currently unimplemented on non-Linux platforms
+    /// and will panic when invoked.
     #[cfg(not(target_os = "linux"))]
     #[allow(clippy::missing_errors_doc)]
     pub fn get_state(&mut self) -> Result<Option<GameState>> {
@@ -635,13 +622,15 @@ impl<const N: usize> GameData<N> {
     /// Instantiates a new group of buffers for storing data from game process memory.
     /// The group will contain `N` buffers, where `N` is the length of `sizes`.
     /// The size of each buffer depends on the contents of `sizes`.
-    /// For example, `GameData::new([4, 2, 4])` creates three byte buffers of lengths 4, 2, and 4, respectively.
+    /// For example, `GameData::new([4, 2, 4])`
+    /// creates three byte buffers of lengths 4, 2, and 4, respectively.
     fn new(sizes: [usize; N]) -> Self {
         let mut buffers = sizes.map(|size| vec![0u8; size]);
 
         let io_slices = buffers.each_mut().map(|buf| unsafe {
-            // SAFETY: We're creating IoSliceMut with 'static lifetime, but we ensure
-            // `buffers` lives at least as long as `io_slices` by storing them together in the GameData struct.
+            // SAFETY: We're creating IoSliceMut with 'static lifetime,
+            // but we ensure `buffers` lives at least as long as `io_slices`
+            // by storing them together in the GameData struct.
             // Also, the struct fields are ordered so that `io_slices` is dropped before `buffers`.
             IoSliceMut::new(std::slice::from_raw_parts_mut(buf.as_mut_ptr(), buf.len()))
         });
