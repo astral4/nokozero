@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 use nix::errno::Errno;
 use nix::unistd::Pid;
 use std::fs::read_to_string;
@@ -43,6 +43,25 @@ const ITEM_BYTE_LEN: usize = 0xc88;
 // Reference: https://github.com/exphp-share/th-re-data/blob/41cd633354f3bbc4ff11b3d315ef7243c990f227/data/th15.v1.00b/type-structs-own.json#L1025
 const ITEMS_CAP: usize = 600;
 
+const LASERS_PTR: usize = 0xe9ba0;
+const LASERS_LIST: usize = 0x5e0;
+const LASER_NEXT_PTR: usize = 0x4;
+const LASER_TYPE: usize = 0x14;
+const LASER_POS: usize = 0x54;
+const LASER_ANGLE: usize = 0x6c;
+const LASER_LENGTH: usize = 0x70;
+const LASER_WIDTH: usize = 0x74;
+const LASER_SPEED: usize = 0x78;
+const BASE_LASER_BYTE_LEN: usize = 0x5d4;
+const RAY_LASER_ORIGIN_VEL: usize = 0xc;
+const RAY_LASER_ANGULAR_VEL: usize = 0x1c;
+const CURVE_LASER_NUM_NODES: usize = 0x20;
+const CURVE_LASER_NODES_ARRAY: usize = 0xf68;
+const CURVE_LASER_NODE_POS: usize = 0x0;
+const CURVE_LASER_NODE_ANGLE: usize = 0x18;
+const CURVE_LASER_NODE_SPEED: usize = 0x1c;
+const CURVE_LASER_NODE_BYTE_LEN: usize = 0x20;
+
 const PLAYER_PTR: usize = 0xe9bb8;
 const PLAYER_POS: usize = 0x618;
 const PLAYER_IS_FOCUSED: usize = 0x16240;
@@ -52,12 +71,17 @@ const PLAYER_HITBOX_RADIUS: usize = 0x2bfc8;
 pub struct StateReader {
     pid: Pid,
     base_addr: usize,
-    ptrs: GameData<4>,
-    bullet_ptrs: GameData<2>,
-    bullet_data: GameData<4>,
-    enemy_ptrs: GameData<2>,
-    enemy_data: GameData<7>,
-    item_data: GameData<4>,
+    ptrs: GameData<5>,               // managers: bullet, enemy, item, laser, player
+    bullet_ptrs: GameData<2>,        // list pointers: current, next
+    bullet_data: GameData<4>,        // pos, vel, radius, state
+    enemy_ptrs: GameData<2>,         // list pointers: current, next
+    enemy_data: GameData<7>,         // pos, vel, radius, ANM VM ID, HP, max HP, flags
+    item_data: GameData<4>,          // pos, vel, state, type
+    base_laser_data: GameData<2>,    // type, width
+    segment_laser_data: GameData<4>, // pos, angle, length, speed
+    ray_laser_data: GameData<4>,     // pos, angle, origin vel, angular vel
+    curve_laser_data: GameData<2>,   // node count, pointer to list head
+    curve_laser_node_data: GameData<3>, // pos, angle, speed
     player_data: GameData<3>,
 }
 
@@ -66,6 +90,7 @@ pub struct GameState {
     pub bullets: Vec<BulletState>,
     pub enemies: Vec<EnemyState>,
     pub items: Vec<ItemState>,
+    pub lasers: LaserState,
     pub player: PlayerState,
 }
 
@@ -96,6 +121,49 @@ pub struct ItemState {
     pub vel_x: f32,
     pub vel_y: f32,
     pub item_type: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct LaserState {
+    pub segments: Vec<SegmentLaserState>,
+    pub rays: Vec<RayLaserState>,
+    pub curves: Vec<CurveLaserState>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct SegmentLaserState {
+    pub head_pos_x: f32,
+    pub head_pos_y: f32,
+    pub vel_x: f32,
+    pub vel_y: f32,
+    pub length: f32,
+    pub width: f32,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct RayLaserState {
+    pub origin_pos_x: f32,
+    pub origin_pos_y: f32,
+    pub origin_vel_x: f32,
+    pub origin_vel_y: f32,
+    pub cos_angle: f32,
+    pub sin_angle: f32,
+    pub angular_vel: f32,
+    pub width: f32,
+}
+
+#[derive(Debug, Clone)]
+pub struct CurveLaserState {
+    pub nodes: Vec<CurveLaserNode>,
+    pub width: f32,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct CurveLaserNode {
+    pub pos_x: f32,
+    pub pos_y: f32,
+    pub vel_x: f32,
+    pub vel_y: f32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -133,12 +201,17 @@ impl StateReader {
         Ok(Self {
             pid,
             base_addr,
-            ptrs: GameData::new([4, 4, 4, 4]),
+            ptrs: GameData::new([4, 4, 4, 4, 4]),
             bullet_ptrs: GameData::new([4, 4]),
             bullet_data: GameData::new([8, 8, 4, 2]),
             enemy_ptrs: GameData::new([4, 4]),
             enemy_data: GameData::new([8, 8, 4, 4, 4, 4, 4]),
             item_data: GameData::new([8, 8, 4, 4]),
+            base_laser_data: GameData::new([4, 4]),
+            segment_laser_data: GameData::new([8, 4, 4, 4]),
+            ray_laser_data: GameData::new([8, 4, 8, 4]),
+            curve_laser_data: GameData::new([4, 4]),
+            curve_laser_node_data: GameData::new([8, 4, 4]),
             player_data: GameData::new([8, 4, 4]),
         })
     }
@@ -162,9 +235,15 @@ impl StateReader {
         let bullets_ptr = *self.ptrs.get::<u32>(0) as usize;
         let enemies_ptr = *self.ptrs.get::<u32>(1) as usize;
         let items_ptr = *self.ptrs.get::<u32>(2) as usize;
-        let player_ptr = *self.ptrs.get::<u32>(3) as usize;
+        let lasers_ptr = *self.ptrs.get::<u32>(3) as usize;
+        let player_ptr = *self.ptrs.get::<u32>(4) as usize;
 
-        if bullets_ptr == 0 || enemies_ptr == 0 || items_ptr == 0 || player_ptr == 0 {
+        if bullets_ptr == 0
+            || enemies_ptr == 0
+            || items_ptr == 0
+            || lasers_ptr == 0
+            || player_ptr == 0
+        {
             return Ok(None);
         }
 
@@ -172,6 +251,7 @@ impl StateReader {
             bullets: self.get_bullets_state(bullets_ptr)?,
             enemies: self.get_enemies_state(enemies_ptr)?,
             items: self.get_items_state(items_ptr)?,
+            lasers: self.get_lasers_state(lasers_ptr)?,
             player: self.get_player_state(player_ptr)?,
         }))
     }
@@ -365,6 +445,172 @@ impl StateReader {
         }
 
         Ok(items)
+    }
+
+    /// Gets the current state of all lasers on the playing field.
+    ///
+    /// # Errors
+    /// This function returns an error if the game process memory could not be read.
+    #[cfg(target_os = "linux")]
+    fn get_lasers_state(&mut self, lasers_ptr: usize) -> Result<LaserState> {
+        let mut segment_lasers = Vec::new();
+        let mut ray_lasers = Vec::new();
+        let mut curve_lasers = Vec::new();
+
+        let mut laser_data_ptr = {
+            let mut list_head_ptr_buf = [0u8; 4];
+
+            read(
+                self.pid,
+                &mut [IoSliceMut::new(&mut list_head_ptr_buf)],
+                &[RemoteIoVec { base: lasers_ptr + LASERS_LIST, len: 4 }],
+            )?;
+
+            u32::from_le_bytes(list_head_ptr_buf) as usize
+        };
+
+        loop {
+            let laser_next_ptr = {
+                let mut list_head_ptr_buf = [0u8; 4];
+
+                read(
+                    self.pid,
+                    &mut [IoSliceMut::new(&mut list_head_ptr_buf)],
+                    &[RemoteIoVec { base: laser_data_ptr + LASER_NEXT_PTR, len: 4 }],
+                )?;
+
+                u32::from_le_bytes(list_head_ptr_buf) as usize
+            };
+
+            if laser_next_ptr == 0 {
+                break;
+            }
+
+            let locations = [
+                RemoteIoVec { base: laser_data_ptr + LASER_TYPE, len: 4 },
+                RemoteIoVec { base: laser_data_ptr + LASER_WIDTH, len: 4 },
+            ];
+
+            read(
+                self.pid,
+                self.base_laser_data.as_io_slices_mut(),
+                &locations,
+            )?;
+
+            let width: f32 = *self.base_laser_data.get(1);
+
+            match *self.base_laser_data.get::<u32>(0) {
+                0 => {
+                    let locations = [
+                        RemoteIoVec { base: laser_data_ptr + LASER_POS, len: 8 },
+                        RemoteIoVec { base: laser_data_ptr + LASER_ANGLE, len: 4 },
+                        RemoteIoVec { base: laser_data_ptr + LASER_LENGTH, len: 4 },
+                        RemoteIoVec { base: laser_data_ptr + LASER_SPEED, len: 4 },
+                    ];
+
+                    read(
+                        self.pid,
+                        self.segment_laser_data.as_io_slices_mut(),
+                        &locations,
+                    )?;
+
+                    let &[head_pos_x, head_pos_y] = self.segment_laser_data.get(0);
+                    let (sin_angle, cos_angle) = self.segment_laser_data.get::<f32>(1).sin_cos();
+                    let length = *self.segment_laser_data.get(2);
+                    let speed = self.segment_laser_data.get(3);
+
+                    segment_lasers.push(SegmentLaserState {
+                        head_pos_x,
+                        head_pos_y,
+                        vel_x: speed * cos_angle,
+                        vel_y: speed * sin_angle,
+                        length,
+                        width,
+                    });
+                }
+                1 => {
+                    let laser_data_ptr = laser_data_ptr + BASE_LASER_BYTE_LEN;
+
+                    let locations = [
+                        RemoteIoVec { base: laser_data_ptr + LASER_POS, len: 8 },
+                        RemoteIoVec { base: laser_data_ptr + LASER_ANGLE, len: 4 },
+                        RemoteIoVec { base: laser_data_ptr + RAY_LASER_ORIGIN_VEL, len: 8 },
+                        RemoteIoVec { base: laser_data_ptr + RAY_LASER_ANGULAR_VEL, len: 4 },
+                    ];
+
+                    read(self.pid, self.ray_laser_data.as_io_slices_mut(), &locations)?;
+
+                    let &[origin_pos_x, origin_pos_y] = self.ray_laser_data.get(0);
+                    let (sin_angle, cos_angle) = self.ray_laser_data.get::<f32>(1).sin_cos();
+                    let &[origin_vel_x, origin_vel_y] = self.ray_laser_data.get(2);
+                    let angular_vel = *self.ray_laser_data.get(3);
+
+                    ray_lasers.push(RayLaserState {
+                        origin_pos_x,
+                        origin_pos_y,
+                        origin_vel_x,
+                        origin_vel_y,
+                        cos_angle,
+                        sin_angle,
+                        angular_vel,
+                        width,
+                    });
+                }
+                2 => {
+                    let laser_data_ptr = laser_data_ptr + BASE_LASER_BYTE_LEN;
+                    let mut nodes = Vec::new();
+
+                    let locations = [
+                        RemoteIoVec { base: laser_data_ptr + CURVE_LASER_NUM_NODES, len: 4 },
+                        RemoteIoVec { base: laser_data_ptr + CURVE_LASER_NODES_ARRAY, len: 4 },
+                    ];
+
+                    read(
+                        self.pid,
+                        self.curve_laser_data.as_io_slices_mut(),
+                        &locations,
+                    )?;
+
+                    let num_nodes = *self.curve_laser_data.get::<u32>(0) as usize;
+                    let node_data_ptr = *self.curve_laser_data.get::<u32>(1) as usize;
+
+                    for i in 0..num_nodes {
+                        let node_base = node_data_ptr + i * CURVE_LASER_NODE_BYTE_LEN;
+
+                        let locations = [
+                            RemoteIoVec { base: node_base + CURVE_LASER_NODE_POS, len: 8 },
+                            RemoteIoVec { base: node_base + CURVE_LASER_NODE_ANGLE, len: 4 },
+                            RemoteIoVec { base: node_base + CURVE_LASER_NODE_SPEED, len: 4 },
+                        ];
+
+                        read(
+                            self.pid,
+                            self.curve_laser_node_data.as_io_slices_mut(),
+                            &locations,
+                        )?;
+
+                        let &[pos_x, pos_y] = self.curve_laser_node_data.get(0);
+                        let (sin_angle, cos_angle) =
+                            self.curve_laser_node_data.get::<f32>(1).sin_cos();
+                        let speed = self.curve_laser_node_data.get(2);
+
+                        nodes.push(CurveLaserNode {
+                            pos_x,
+                            pos_y,
+                            vel_x: speed * cos_angle,
+                            vel_y: speed * sin_angle,
+                        });
+                    }
+
+                    curve_lasers.push(CurveLaserState { nodes, width });
+                }
+                id => bail!("unknown laser type (type {id})"),
+            }
+
+            laser_data_ptr = laser_next_ptr;
+        }
+
+        Ok(LaserState { segments: segment_lasers, rays: ray_lasers, curves: curve_lasers })
     }
 
     /// Gets the current state of the player.
