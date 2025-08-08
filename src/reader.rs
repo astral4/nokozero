@@ -231,7 +231,7 @@ impl StateReader {
             RemoteIoVec { base: self.base_addr + PLAYER_PTR, len: 4 },
         ];
 
-        read(self.pid, self.ptrs.as_io_slices_mut(), &ptr_locations)?;
+        self.ptrs.read(self.pid, &ptr_locations)?;
 
         let bullets_ptr = *self.ptrs.get::<u32>(0) as usize;
         let enemies_ptr = *self.ptrs.get::<u32>(1) as usize;
@@ -273,7 +273,7 @@ impl StateReader {
                 RemoteIoVec { base: bullet_next_ptr + BULLET_NEXT_PTR, len: 4 },
             ];
 
-            read(self.pid, self.list_ptrs.as_io_slices_mut(), &ptr_locations)?;
+            self.list_ptrs.read(self.pid, &ptr_locations)?;
 
             let bullet_data_ptr = *self.list_ptrs.get::<u32>(0) as usize;
             bullet_next_ptr = *self.list_ptrs.get::<u32>(1) as usize;
@@ -289,7 +289,7 @@ impl StateReader {
                 RemoteIoVec { base: bullet_data_ptr + BULLET_STATE, len: 2 },
             ];
 
-            read(self.pid, self.bullet_data.as_io_slices_mut(), &locations)?;
+            self.bullet_data.read(self.pid, &locations)?;
 
             // Check if bullet state is active
             if self.bullet_data.get::<u16>(3) == &1 {
@@ -329,7 +329,7 @@ impl StateReader {
                 RemoteIoVec { base: enemy_next_ptr + ENEMY_NEXT_PTR, len: 4 },
             ];
 
-            read(self.pid, self.list_ptrs.as_io_slices_mut(), &ptr_locations)?;
+            self.list_ptrs.read(self.pid, &ptr_locations)?;
 
             let enemy_data_ptr = *self.list_ptrs.get::<u32>(0) as usize;
             enemy_next_ptr = *self.list_ptrs.get::<u32>(1) as usize;
@@ -348,7 +348,7 @@ impl StateReader {
                 RemoteIoVec { base: enemy_data_ptr + ENEMY_FLAGS, len: 4 },
             ];
 
-            read(self.pid, self.enemy_data.as_io_slices_mut(), &locations)?;
+            self.enemy_data.read(self.pid, &locations)?;
 
             // Check if the enemy is a boss
             let is_boss = self.enemy_data.get::<u32>(6) & ENEMY_BOSS_FLAG != 0;
@@ -402,7 +402,7 @@ impl StateReader {
                 RemoteIoVec { base: item_base + ITEM_TYPE, len: 4 },
             ];
 
-            read(self.pid, self.item_data.as_io_slices_mut(), &locations)?;
+            self.item_data.read(self.pid, &locations)?;
 
             // Check if item state is active
             if self.item_data.get::<u32>(2) != &0 {
@@ -441,11 +441,7 @@ impl StateReader {
                 RemoteIoVec { base: laser_data_ptr + LASER_WIDTH, len: 4 },
             ];
 
-            read(
-                self.pid,
-                self.base_laser_data.as_io_slices_mut(),
-                &locations,
-            )?;
+            self.base_laser_data.read(self.pid, &locations)?;
 
             let width: f32 = *self.base_laser_data.get(1);
 
@@ -458,11 +454,7 @@ impl StateReader {
                         RemoteIoVec { base: laser_data_ptr + LASER_SPEED, len: 4 },
                     ];
 
-                    read(
-                        self.pid,
-                        self.segment_laser_data.as_io_slices_mut(),
-                        &locations,
-                    )?;
+                    self.segment_laser_data.read(self.pid, &locations)?;
 
                     let &[head_pos_x, head_pos_y] = self.segment_laser_data.get(0);
                     let (sin_angle, cos_angle) = self.segment_laser_data.get::<f32>(1).sin_cos();
@@ -488,7 +480,7 @@ impl StateReader {
                         RemoteIoVec { base: laser_data_ptr + RAY_LASER_ANGULAR_VEL, len: 4 },
                     ];
 
-                    read(self.pid, self.ray_laser_data.as_io_slices_mut(), &locations)?;
+                    self.ray_laser_data.read(self.pid, &locations)?;
 
                     let &[origin_pos_x, origin_pos_y] = self.ray_laser_data.get(0);
                     let (sin_angle, cos_angle) = self.ray_laser_data.get::<f32>(1).sin_cos();
@@ -515,11 +507,7 @@ impl StateReader {
                         RemoteIoVec { base: laser_data_ptr + CURVE_LASER_NODES_ARRAY, len: 4 },
                     ];
 
-                    read(
-                        self.pid,
-                        self.curve_laser_data.as_io_slices_mut(),
-                        &locations,
-                    )?;
+                    self.curve_laser_data.read(self.pid, &locations)?;
 
                     let num_nodes = *self.curve_laser_data.get::<u32>(0) as usize;
                     let node_data_ptr = *self.curve_laser_data.get::<u32>(1) as usize;
@@ -533,11 +521,7 @@ impl StateReader {
                             RemoteIoVec { base: node_base + CURVE_LASER_NODE_SPEED, len: 4 },
                         ];
 
-                        read(
-                            self.pid,
-                            self.curve_laser_node_data.as_io_slices_mut(),
-                            &locations,
-                        )?;
+                        self.curve_laser_node_data.read(self.pid, &locations)?;
 
                         let &[pos_x, pos_y] = self.curve_laser_node_data.get(0);
                         let (sin_angle, cos_angle) =
@@ -575,7 +559,7 @@ impl StateReader {
             RemoteIoVec { base: player_ptr + PLAYER_HITBOX_RADIUS, len: 4 },
         ];
 
-        read(self.pid, self.player_data.as_io_slices_mut(), &locations)?;
+        self.player_data.read(self.pid, &locations)?;
 
         let &[pos_x, pos_y] = self.player_data.get(0);
         let is_focused = self.player_data.get::<u32>(1) == &1;
@@ -591,11 +575,8 @@ impl StateReader {
     /// This function returns an error if the game process memory could not be read.
     #[cfg(target_os = "linux")]
     fn read_single_ptr(&mut self, offset: usize) -> Result<usize> {
-        read(
-            self.pid,
-            self.single_ptr.as_io_slices_mut(),
-            &[RemoteIoVec { base: offset, len: 4 }],
-        )?;
+        self.single_ptr
+            .read(self.pid, &[RemoteIoVec { base: offset, len: 4 }])?;
 
         Ok(*self.single_ptr.get::<u32>(0) as usize)
     }
@@ -638,9 +619,29 @@ impl<const N: usize> GameData<N> {
         Self { io_slices, buffers }
     }
 
-    /// Returns the list of buffers as `&mut [IoSliceMut<'_>]` for use with `process_vm_readv()`.
-    fn as_io_slices_mut(&mut self) -> &mut [IoSliceMut<'static>] {
-        self.io_slices.as_mut()
+    /// Reads the memory of the process with the given PID at the given locations
+    /// and copies the data into this instance of `GameData`.
+    ///
+    /// # Errors
+    /// This function returns an error if the process memory could not be read.
+    #[cfg(target_os = "linux")]
+    fn read(&mut self, pid: Pid, locations: &[RemoteIoVec; N]) -> Result<()> {
+        if let Err(errno) = process_vm_readv(pid, self.io_slices.as_mut(), locations) {
+            return Err(match errno {
+                Errno::EFAULT => anyhow!(
+                    "a memory location is out of bounds for the game process"
+                ),
+                Errno::EINVAL => anyhow!("length of data to be read is too large"),
+                Errno::ENOMEM => anyhow!("fatal error (out of memory)"),
+                Errno::EPERM => anyhow!(
+                    "this program does not have permission to access the address space of the game process"
+                ),
+                Errno::ESRCH => anyhow!("no process with PID {pid} exists"),
+                _ => anyhow!("unknown error (errno {errno}"),
+            }.context("failed to read game process memory"));
+        }
+
+        Ok(())
     }
 
     /// Interprets the byte buffer at the provided index as a value of type `T`,
@@ -648,25 +649,4 @@ impl<const N: usize> GameData<N> {
     fn get<T: FromBytes + KnownLayout + Immutable>(&self, index: usize) -> &T {
         FromBytes::ref_from_bytes(&self.buffers[index]).unwrap()
     }
-}
-
-/// Utility method wrapping `process_vm_readv()` with more helpful error messages.
-#[cfg(target_os = "linux")]
-fn read(pid: Pid, buffers: &mut [IoSliceMut<'_>], locations: &[RemoteIoVec]) -> Result<()> {
-    if let Err(errno) = process_vm_readv(pid, buffers, locations) {
-        return Err(match errno {
-            Errno::EFAULT => anyhow!(
-                "a memory location is out of bounds for the game process"
-            ),
-            Errno::EINVAL => anyhow!("length of data to be read is too large"),
-            Errno::ENOMEM => anyhow!("fatal error (out of memory)"),
-            Errno::EPERM => anyhow!(
-                "this program does not have permission to access the address space of the game process"
-            ),
-            Errno::ESRCH => anyhow!("no process with PID {pid} exists"),
-            _ => anyhow!("unknown error (errno {errno}"),
-        }.context("failed to read game process memory"));
-    }
-
-    Ok(())
 }
