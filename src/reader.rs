@@ -475,16 +475,13 @@ impl StateReader {
                     });
                 }
                 1 => {
-                    let laser_data_ptr = laser_data_ptr + BASE_LASER_BYTE_LEN;
-
-                    let locations = [
-                        RemoteIoVec { base: laser_data_ptr + LASER_POS, len: 8 },
-                        RemoteIoVec { base: laser_data_ptr + LASER_ANGLE, len: 4 },
-                        RemoteIoVec { base: laser_data_ptr + RAY_LASER_ORIGIN_VEL, len: 8 },
-                        RemoteIoVec { base: laser_data_ptr + RAY_LASER_ANGULAR_VEL, len: 4 },
-                    ];
-
-                    self.ray_laser_data.read(self.pid, &locations)?;
+                    #[rustfmt::skip]
+                    self.ray_laser_data.read(self.pid, &[
+                        laser_data_ptr + LASER_POS,
+                        laser_data_ptr + LASER_ANGLE,
+                        laser_data_ptr + BASE_LASER_BYTE_LEN + RAY_LASER_ORIGIN_VEL,
+                        laser_data_ptr + BASE_LASER_BYTE_LEN + RAY_LASER_ANGULAR_VEL,
+                    ])?;
 
                     let &[origin_pos_x, origin_pos_y] = self.ray_laser_data.get(0);
                     let (sin_angle, cos_angle) = self.ray_laser_data.get::<f32>(1).sin_cos();
