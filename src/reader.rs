@@ -71,31 +71,31 @@ const PLAYER_HITBOX_RADIUS: usize = 0x2bfc8;
 pub struct StateReader {
     pid: Pid,
     base_addr: usize,
-    ptrs: GameData<5>,               // managers: bullet, enemy, item, laser, player
-    single_ptr: GameData<1>,         // single list pointer
-    list_ptrs: GameData<2>,          // list pointers: current, next
-    bullet_data: GameData<4>,        // pos, vel, radius, state
-    enemy_data: GameData<7>,         // pos, vel, radius, ANM VM ID, HP, max HP, flags
-    item_data: GameData<4>,          // pos, vel, state, type
-    base_laser_data: GameData<2>,    // type, width
-    segment_laser_data: GameData<4>, // pos, angle, length, speed
-    ray_laser_data: GameData<4>,     // pos, angle, origin vel, angular vel
-    curve_laser_data: GameData<2>,   // node count, pointer to list head
-    curve_laser_node_data: GameData<3>, // pos, angle, speed
-    player_data: GameData<3>,        // pos, focus state, radius
+    ptrs: Data<5>,                  // managers: bullet, enemy, item, laser, player
+    single_ptr: Data<1>,            // single list pointer
+    list_ptrs: Data<2>,             // list pointers: current, next
+    bullet_data: Data<4>,           // pos, vel, radius, state
+    enemy_data: Data<7>,            // pos, vel, radius, ANM VM ID, HP, max HP, flags
+    item_data: Data<4>,             // pos, vel, state, type
+    base_laser_data: Data<2>,       // type, width
+    segment_laser_data: Data<4>,    // pos, angle, length, speed
+    ray_laser_data: Data<4>,        // pos, angle, origin vel, angular vel
+    curve_laser_data: Data<2>,      // node count, pointer to list head
+    curve_laser_node_data: Data<3>, // pos, angle, speed
+    player_data: Data<3>,           // pos, focus state, radius
 }
 
 #[derive(Debug, Clone)]
 pub struct GameState {
-    pub bullets: Vec<BulletState>,
-    pub enemies: Vec<EnemyState>,
-    pub items: Vec<ItemState>,
-    pub lasers: LaserState,
-    pub player: PlayerState,
+    pub bullets: Vec<Bullet>,
+    pub enemies: Vec<Enemy>,
+    pub items: Vec<Item>,
+    pub lasers: Lasers,
+    pub player: Player,
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct BulletState {
+pub struct Bullet {
     pub pos_x: f32,
     pub pos_y: f32,
     pub vel_x: f32,
@@ -104,7 +104,7 @@ pub struct BulletState {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct EnemyState {
+pub struct Enemy {
     pub pos_x: f32,
     pub pos_y: f32,
     pub vel_x: f32,
@@ -115,7 +115,7 @@ pub struct EnemyState {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct ItemState {
+pub struct Item {
     pub pos_x: f32,
     pub pos_y: f32,
     pub vel_x: f32,
@@ -124,14 +124,14 @@ pub struct ItemState {
 }
 
 #[derive(Debug, Clone)]
-pub struct LaserState {
-    pub segments: Vec<SegmentLaserState>,
-    pub rays: Vec<RayLaserState>,
-    pub curves: Vec<CurveLaserState>,
+pub struct Lasers {
+    pub segments: Vec<SegmentLaser>,
+    pub rays: Vec<RayLaser>,
+    pub curves: Vec<CurveLaser>,
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct SegmentLaserState {
+pub struct SegmentLaser {
     pub head_pos_x: f32,
     pub head_pos_y: f32,
     pub vel_x: f32,
@@ -141,7 +141,7 @@ pub struct SegmentLaserState {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct RayLaserState {
+pub struct RayLaser {
     pub origin_pos_x: f32,
     pub origin_pos_y: f32,
     pub origin_vel_x: f32,
@@ -153,7 +153,7 @@ pub struct RayLaserState {
 }
 
 #[derive(Debug, Clone)]
-pub struct CurveLaserState {
+pub struct CurveLaser {
     pub nodes: Vec<CurveLaserNode>,
     pub width: f32,
 }
@@ -167,7 +167,7 @@ pub struct CurveLaserNode {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct PlayerState {
+pub struct Player {
     pub pos_x: f32,
     pub pos_y: f32,
     pub is_focused: bool,
@@ -201,18 +201,18 @@ impl StateReader {
         Ok(Self {
             pid,
             base_addr,
-            ptrs: GameData::new([4, 4, 4, 4, 4]),
-            single_ptr: GameData::new([4]),
-            list_ptrs: GameData::new([4, 4]),
-            bullet_data: GameData::new([8, 8, 4, 2]),
-            enemy_data: GameData::new([8, 8, 4, 4, 4, 4, 4]),
-            item_data: GameData::new([8, 8, 4, 4]),
-            base_laser_data: GameData::new([4, 4]),
-            segment_laser_data: GameData::new([8, 4, 4, 4]),
-            ray_laser_data: GameData::new([8, 4, 8, 4]),
-            curve_laser_data: GameData::new([4, 4]),
-            curve_laser_node_data: GameData::new([8, 4, 4]),
-            player_data: GameData::new([8, 4, 4]),
+            ptrs: Data::new([4, 4, 4, 4, 4]),
+            single_ptr: Data::new([4]),
+            list_ptrs: Data::new([4, 4]),
+            bullet_data: Data::new([8, 8, 4, 2]),
+            enemy_data: Data::new([8, 8, 4, 4, 4, 4, 4]),
+            item_data: Data::new([8, 8, 4, 4]),
+            base_laser_data: Data::new([4, 4]),
+            segment_laser_data: Data::new([8, 4, 4, 4]),
+            ray_laser_data: Data::new([8, 4, 8, 4]),
+            curve_laser_data: Data::new([4, 4]),
+            curve_laser_node_data: Data::new([8, 4, 4]),
+            player_data: Data::new([8, 4, 4]),
         })
     }
 
@@ -248,11 +248,11 @@ impl StateReader {
         }
 
         Ok(Some(GameState {
-            bullets: self.get_bullets_state(bullets_ptr)?,
-            enemies: self.get_enemies_state(enemies_ptr)?,
-            items: self.get_items_state(items_ptr)?,
-            lasers: self.get_lasers_state(lasers_ptr)?,
-            player: self.get_player_state(player_ptr)?,
+            bullets: self.get_bullets(bullets_ptr)?,
+            enemies: self.get_enemies(enemies_ptr)?,
+            items: self.get_items(items_ptr)?,
+            lasers: self.get_lasers(lasers_ptr)?,
+            player: self.get_player(player_ptr)?,
         }))
     }
 
@@ -261,7 +261,7 @@ impl StateReader {
     /// # Errors
     /// This function returns an error if the game process memory could not be read.
     #[cfg(target_os = "linux")]
-    fn get_bullets_state(&mut self, bullets_ptr: usize) -> Result<Vec<BulletState>> {
+    fn get_bullets(&mut self, bullets_ptr: usize) -> Result<Vec<Bullet>> {
         let mut bullets = Vec::new();
 
         let mut bullet_next_ptr = bullets_ptr + BULLETS_LIST;
@@ -301,7 +301,7 @@ impl StateReader {
                 {
                     let &[vel_x, vel_y] = self.bullet_data.get(1);
 
-                    bullets.push(BulletState {
+                    bullets.push(Bullet {
                         pos_x,
                         pos_y,
                         vel_x,
@@ -320,7 +320,7 @@ impl StateReader {
     /// # Errors
     /// This function returns an error if the game process memory could not be read.
     #[cfg(target_os = "linux")]
-    fn get_enemies_state(&mut self, enemies_ptr: usize) -> Result<Vec<EnemyState>> {
+    fn get_enemies(&mut self, enemies_ptr: usize) -> Result<Vec<Enemy>> {
         let mut enemies = Vec::new();
 
         // Get the pointer to the head of the linked list of enemies
@@ -369,7 +369,7 @@ impl StateReader {
                     (hp / max_hp).clamp(0., 1.)
                 };
 
-                enemies.push(EnemyState {
+                enemies.push(Enemy {
                     pos_x,
                     pos_y,
                     vel_x,
@@ -389,7 +389,7 @@ impl StateReader {
     /// # Errors
     /// This function returns an error if the game process memory could not be read.
     #[cfg(target_os = "linux")]
-    fn get_items_state(&mut self, items_ptr: usize) -> Result<Vec<ItemState>> {
+    fn get_items(&mut self, items_ptr: usize) -> Result<Vec<Item>> {
         let mut items = Vec::new();
 
         for i in 0..ITEMS_CAP {
@@ -409,7 +409,7 @@ impl StateReader {
                 let &[vel_x, vel_y] = self.item_data.get(1);
                 let item_type = *self.item_data.get(3);
 
-                items.push(ItemState {
+                items.push(Item {
                     pos_x,
                     pos_y,
                     vel_x,
@@ -427,7 +427,7 @@ impl StateReader {
     /// # Errors
     /// This function returns an error if the game process memory could not be read.
     #[cfg(target_os = "linux")]
-    fn get_lasers_state(&mut self, lasers_ptr: usize) -> Result<LaserState> {
+    fn get_lasers(&mut self, lasers_ptr: usize) -> Result<Lasers> {
         let mut segment_lasers = Vec::new();
         let mut ray_lasers = Vec::new();
         let mut curve_lasers = Vec::new();
@@ -465,7 +465,7 @@ impl StateReader {
                     let length = *self.segment_laser_data.get(2);
                     let speed = self.segment_laser_data.get(3);
 
-                    segment_lasers.push(SegmentLaserState {
+                    segment_lasers.push(SegmentLaser {
                         head_pos_x,
                         head_pos_y,
                         vel_x: speed * cos_angle,
@@ -488,7 +488,7 @@ impl StateReader {
                     let &[origin_vel_x, origin_vel_y] = self.ray_laser_data.get(2);
                     let angular_vel = *self.ray_laser_data.get(3);
 
-                    ray_lasers.push(RayLaserState {
+                    ray_lasers.push(RayLaser {
                         origin_pos_x,
                         origin_pos_y,
                         origin_vel_x,
@@ -534,7 +534,7 @@ impl StateReader {
                         });
                     }
 
-                    curve_lasers.push(CurveLaserState { nodes, width });
+                    curve_lasers.push(CurveLaser { nodes, width });
                 }
                 id => bail!("unknown laser type (type {id})"),
             }
@@ -542,7 +542,7 @@ impl StateReader {
             laser_data_ptr = laser_next_ptr;
         }
 
-        Ok(LaserState {
+        Ok(Lasers {
             segments: segment_lasers,
             rays: ray_lasers,
             curves: curve_lasers,
@@ -554,21 +554,19 @@ impl StateReader {
     /// # Errors
     /// This function returns an error if the game process memory could not be read.
     #[cfg(target_os = "linux")]
-    fn get_player_state(&mut self, player_ptr: usize) -> Result<PlayerState> {
-        self.player_data.read(
-            self.pid,
-            &[
-                player_ptr + PLAYER_POS,
-                player_ptr + PLAYER_IS_FOCUSED,
-                player_ptr + PLAYER_HITBOX_RADIUS,
-            ],
-        )?;
+    fn get_player(&mut self, player_ptr: usize) -> Result<Player> {
+        #[rustfmt::skip]
+        self.player_data.read(self.pid, &[
+            player_ptr + PLAYER_POS,
+            player_ptr + PLAYER_IS_FOCUSED,
+            player_ptr + PLAYER_HITBOX_RADIUS,
+        ])?;
 
         let &[pos_x, pos_y] = self.player_data.get(0);
         let is_focused = self.player_data.get::<u32>(1) == &1;
         let hitbox_radius = *self.player_data.get(2);
 
-        Ok(PlayerState {
+        Ok(Player {
             pos_x,
             pos_y,
             is_focused,
@@ -600,25 +598,25 @@ impl StateReader {
 }
 
 #[derive(Debug)]
-struct GameData<const N: usize> {
+struct Data<const N: usize> {
     sizes: [usize; N],
     io_slices: [IoSliceMut<'static>; N],
     buffers: [Vec<u8>; N],
 }
 
-impl<const N: usize> GameData<N> {
-    /// Instantiates a new group of buffers for storing data from game process memory.
+impl<const N: usize> Data<N> {
+    /// Instantiates a new group of buffers for storing data from process memory.
     /// The group will contain `N` buffers, where `N` is the length of `sizes`.
     /// The size of each buffer depends on the contents of `sizes`.
-    /// For example, `GameData::new([4, 2, 4])`
+    /// For example, `Data::new([4, 2, 4])`
     /// creates three byte buffers of lengths 4, 2, and 4, respectively.
     fn new(sizes: [usize; N]) -> Self {
         let mut buffers = sizes.map(|size| vec![0u8; size]);
 
         let io_slices = buffers.each_mut().map(|buf| unsafe {
-            // SAFETY: We're creating IoSliceMut with 'static lifetime,
+            // SAFETY: We're creating `IoSliceMut` with `'static` lifetime,
             // but we ensure `buffers` lives at least as long as `io_slices`
-            // by storing them together in the GameData struct.
+            // by storing them together in the `Data` struct.
             // Also, the struct fields are ordered so that `io_slices` is dropped before `buffers`.
             IoSliceMut::new(std::slice::from_raw_parts_mut(buf.as_mut_ptr(), buf.len()))
         });
@@ -631,14 +629,14 @@ impl<const N: usize> GameData<N> {
     }
 
     /// Reads the memory of the process with the given PID at the given base addresses
-    /// and copies the data into this instance of `GameData`.
+    /// and copies the data into this instance of `Data`.
     ///
     /// # Errors
     /// This function returns an error if the process memory could not be read.
     #[cfg(target_os = "linux")]
     fn read(&mut self, pid: Pid, locations: &[usize; N]) -> Result<()> {
         // Construct `RemoteIoVec` from base address and stored size
-        let locations: [RemoteIoVec; N] = std::array::from_fn(|i| RemoteIoVec {
+        let locations: [_; N] = std::array::from_fn(|i| RemoteIoVec {
             base: locations[i],
             len: self.sizes[i],
         });
@@ -646,22 +644,22 @@ impl<const N: usize> GameData<N> {
         if let Err(errno) = process_vm_readv(pid, self.io_slices.as_mut(), &locations) {
             return Err(match errno {
                 Errno::EFAULT => anyhow!(
-                    "a memory location is out of bounds for the game process"
+                    "a memory location is out of bounds for the process"
                 ),
                 Errno::EINVAL => anyhow!("length of data to be read is too large"),
                 Errno::ENOMEM => anyhow!("fatal error (out of memory)"),
                 Errno::EPERM => anyhow!(
-                    "this program does not have permission to access the address space of the game process"
+                    "this program does not have permission to access the address space of the process"
                 ),
                 Errno::ESRCH => anyhow!("no process with PID {pid} exists"),
                 _ => anyhow!("unknown error (errno {errno}"),
-            }.context("failed to read game process memory"));
+            }.context("failed to read process memory"));
         }
 
         Ok(())
     }
 
-    /// Interprets the byte buffer at the provided index as a value of type `T`,
+    /// Interprets the byte buffer at the given index as a value of type `T`,
     /// then returns a reference to the value.
     fn get<T: FromBytes + KnownLayout + Immutable>(&self, index: usize) -> &T {
         FromBytes::ref_from_bytes(&self.buffers[index]).unwrap()
