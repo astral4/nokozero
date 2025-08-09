@@ -52,11 +52,10 @@ const LASER_ANGLE: usize = 0x6c;
 const LASER_LENGTH: usize = 0x70;
 const LASER_WIDTH: usize = 0x74;
 const LASER_SPEED: usize = 0x78;
-const BASE_LASER_BYTE_LEN: usize = 0x5d4;
-const RAY_LASER_ORIGIN_VEL: usize = 0xc;
-const RAY_LASER_ANGULAR_VEL: usize = 0x1c;
-const CURVE_LASER_NUM_NODES: usize = 0x20;
-const CURVE_LASER_NODES_ARRAY: usize = 0xf68;
+const RAY_LASER_ORIGIN_VEL: usize = 0x5d4 + 0xc;
+const RAY_LASER_ANGULAR_VEL: usize = 0x5d4 + 0x1c;
+const CURVE_LASER_NUM_NODES: usize = 0x5d4 + 0x20;
+const CURVE_LASER_NODES_ARRAY: usize = 0x5d4 + 0xf68;
 const CURVE_LASER_NODE_POS: usize = 0x0;
 const CURVE_LASER_NODE_ANGLE: usize = 0x18;
 const CURVE_LASER_NODE_SPEED: usize = 0x1c;
@@ -288,8 +287,9 @@ impl StateReader {
                 bullet_data_ptr + BULLET_STATE,
             ])?;
 
-            // Check if bullet state is active
-            if self.bullet_data.get::<u16>(3) == &1 {
+            let is_active = self.bullet_data.get::<u16>(3) == &1;
+
+            if is_active {
                 let &[pos_x, pos_y] = self.bullet_data.get(0);
                 let hitbox_radius: f32 = *self.bullet_data.get(2);
 
@@ -351,14 +351,14 @@ impl StateReader {
                 enemy_data_ptr + ENEMY_FLAGS,
             ])?;
 
-            // Check if the enemy is a boss
             let is_boss = self.enemy_data.get::<u32>(6) & ENEMY_BOSS_FLAG != 0;
+            let has_anm_vm_id = self.enemy_data.get::<u32>(3) != &0;
 
             // Check if the enemy is "real"; i.e. is a boss or has an ANM VM ID set.
-            // Sometimes, there are list entries that simply exist
-            // to make bullet patterns easier to implement,
-            // so they should not be counted as logically distinct entities.
-            if is_boss || (self.enemy_data.get::<u32>(3) != &0) {
+            // The game uses "fake" enemies to make certain bullet patterns easier to implement.
+            // However, the player cannot interact with these enemies,
+            // so they should not be counted as distinct entities.
+            if is_boss || has_anm_vm_id {
                 let &[pos_x, pos_y] = self.enemy_data.get(0);
                 let &[vel_x, vel_y] = self.enemy_data.get(1);
                 let hitbox_radius = *self.enemy_data.get(2);
@@ -448,9 +448,10 @@ impl StateReader {
                 laser_data_ptr + LASER_WIDTH
             ])?;
 
-            let width: f32 = *self.base_laser_data.get(1);
+            let laser_type: u32 = *self.base_laser_data.get(0);
+            let width = *self.base_laser_data.get(1);
 
-            match *self.base_laser_data.get::<u32>(0) {
+            match laser_type {
                 0 => {
                     #[rustfmt::skip]
                     self.segment_laser_data.read(self.pid, &[
@@ -479,8 +480,8 @@ impl StateReader {
                     self.ray_laser_data.read(self.pid, &[
                         laser_data_ptr + LASER_POS,
                         laser_data_ptr + LASER_ANGLE,
-                        laser_data_ptr + BASE_LASER_BYTE_LEN + RAY_LASER_ORIGIN_VEL,
-                        laser_data_ptr + BASE_LASER_BYTE_LEN + RAY_LASER_ANGULAR_VEL,
+                        laser_data_ptr + RAY_LASER_ORIGIN_VEL,
+                        laser_data_ptr + RAY_LASER_ANGULAR_VEL,
                     ])?;
 
                     let &[origin_pos_x, origin_pos_y] = self.ray_laser_data.get(0);
@@ -504,8 +505,8 @@ impl StateReader {
 
                     #[rustfmt::skip]
                     self.curve_laser_data.read(self.pid, &[
-                        laser_data_ptr + BASE_LASER_BYTE_LEN + CURVE_LASER_NUM_NODES,
-                        laser_data_ptr + BASE_LASER_BYTE_LEN + CURVE_LASER_NODES_ARRAY,
+                        laser_data_ptr + CURVE_LASER_NUM_NODES,
+                        laser_data_ptr + CURVE_LASER_NODES_ARRAY,
                     ])?;
 
                     let num_nodes = *self.curve_laser_data.get::<u32>(0) as usize;
