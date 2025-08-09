@@ -88,7 +88,7 @@ pub struct StateReader {
 pub struct GameState {
     pub bullets: Vec<Bullet>,
     pub enemies: Vec<Enemy>,
-    pub items: Vec<Item>,
+    pub power_items: Vec<PowerItem>,
     pub lasers: Lasers,
     pub player: Player,
 }
@@ -114,12 +114,11 @@ pub struct Enemy {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct Item {
+pub struct PowerItem {
     pub pos_x: f32,
     pub pos_y: f32,
     pub vel_x: f32,
     pub vel_y: f32,
-    pub item_type: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -249,7 +248,7 @@ impl StateReader {
         Ok(Some(GameState {
             bullets: self.get_bullets(bullets_ptr)?,
             enemies: self.get_enemies(enemies_ptr)?,
-            items: self.get_items(items_ptr)?,
+            power_items: self.get_power_items(items_ptr)?,
             lasers: self.get_lasers(lasers_ptr)?,
             player: self.get_player(player_ptr)?,
         }))
@@ -384,12 +383,12 @@ impl StateReader {
         Ok(enemies)
     }
 
-    /// Gets the current state of all items on the playing field.
+    /// Gets the current state of all power items on the playing field.
     ///
     /// # Errors
     /// This function returns an error if the game process memory could not be read.
     #[cfg(target_os = "linux")]
-    fn get_items(&mut self, items_ptr: usize) -> Result<Vec<Item>> {
+    fn get_power_items(&mut self, items_ptr: usize) -> Result<Vec<PowerItem>> {
         let mut items = Vec::new();
 
         for i in 0..ITEMS_CAP {
@@ -403,18 +402,18 @@ impl StateReader {
                 item_base + ITEM_TYPE,
             ])?;
 
-            // Check if item state is active
-            if self.item_data.get::<u32>(2) != &0 {
+            let is_active = self.item_data.get::<u32>(2) != &0;
+            let is_power_item = matches!(self.item_data.get::<u32>(3), 1 | 3 | 8);
+
+            if is_active && is_power_item {
                 let &[pos_x, pos_y] = self.item_data.get(0);
                 let &[vel_x, vel_y] = self.item_data.get(1);
-                let item_type = *self.item_data.get(3);
 
-                items.push(Item {
+                items.push(PowerItem {
                     pos_x,
                     pos_y,
                     vel_x,
                     vel_y,
-                    item_type,
                 });
             }
         }
