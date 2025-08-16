@@ -31,31 +31,19 @@ fn main() -> Result<()> {
         bail!("`-d`/`--game-dir`: path does not point to a directory");
     }
 
-    let game_exe_path = {
-        // Use VSync patch if present
-        let path = game_dir_path.join("vpatch.exe");
-        if path.is_file() {
-            let dll_path = game_dir_path.join("vpatch_th15.dll");
-            if !dll_path.is_file() {
-                bail!(
-                    "vpatch DLL not found; no file exists at {}",
-                    dll_path.display()
-                );
-            }
-            path
-        } else {
-            let path = game_dir_path.join("th15.exe");
-            if !path.is_file() {
-                bail!(
-                    "game executable not found; no file exists at {}",
-                    path.display()
-                );
-            }
-            path
-        }
-    };
+    let game_exe_path = game_dir_path.join("th15.exe");
+
+    if !game_exe_path.is_file() {
+        bail!(
+            "game executable not found; no file exists at {}",
+            game_exe_path.display()
+        );
+    }
 
     println!("Using game executable at {}", game_exe_path.display());
+
+    // TODO: rework launcher loading
+    let game_exe_path = game_dir_path.join("nokozero_launcher.exe");
 
     // Run game using Wine
     start_game(&game_exe_path).context("failed to start game")?;
@@ -88,7 +76,7 @@ fn main() -> Result<()> {
         if now.duration_since(last_read) >= frame_duration {
             match reader.get_state() {
                 Ok(Some(state)) => {
-                    println!("bullets: {:#?}", state.bullets);
+                    println!("{state:#?}");
                 }
                 Ok(None) => {}
                 Err(e) => {

@@ -1,24 +1,22 @@
-[package]
-name = "nokozero"
+[workspace]
+resolver = "3"
+members = ["nokozero", "nokozero_hook", "nokozero_launcher"]
+
+[workspace.package]
 version = "0.0.0"
 authors = ["Kyle Chen"]
 edition = "2024"
 rust-version = "1.85"
-description = "Reinforcement learning agent that plays Touhou"
 readme = "README.md"
 repository = "https://github.com/astral4/nokozero"
 license = "MIT OR Apache-2.0"
 publish = false
 
-[dependencies]
-anyhow = "1.0.98"
-ctrlc = { version = "3.4.7", features = ["termination"] }
-nix = { version = "0.30.1", features = ["signal", "uio"] }
-pico-args = { version = "0.5.0", features = ["eq-separator"] }
-tap = "1.0.1"
-zerocopy = { version = "0.8.26", features = ["simd", "std"] }
+[workspace.dependencies]
+anyhow = "1.0.99"
+windows = { version = "0.61.3", features = ["Win32_System_Memory"] }
 
-[lints.rust]
+[workspace.lints.rust]
 async_fn_in_trait = "allow"
 ffi_unwind_calls = "warn"
 let_underscore_drop = "deny"
@@ -41,10 +39,11 @@ unused_lifetimes = "deny"
 unused_macro_rules = "deny"
 unused_qualifications = "deny"
 
-[lints.clippy]
+[workspace.lints.clippy]
 doc_markdown = { level = "allow", priority = 1 }
 module_name_repetitions = { level = "allow", priority = 1 }
 should_panic_without_expect = { level = "allow", priority = 1 }
+unreadable_literal = { level = "allow", priority = 1 }
 pedantic = "warn"
 
 [profile.release]

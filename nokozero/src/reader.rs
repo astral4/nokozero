@@ -361,6 +361,7 @@ impl StateReader {
                 let &[pos_x, pos_y] = self.enemy_data.get(0);
                 let &[vel_x, vel_y] = self.enemy_data.get(1);
                 let hitbox_radius = *self.enemy_data.get(2);
+
                 #[allow(clippy::cast_precision_loss)]
                 let hp_ratio = {
                     let hp = *self.enemy_data.get::<i32>(4) as f32;
