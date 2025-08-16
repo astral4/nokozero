@@ -101,7 +101,13 @@ unsafe fn inject_dll(process: HANDLE, dll_path: &CStr) -> Result<()> {
         )
         .context("failed to write DLL path to game process memory")?;
 
-        // Get address of `LoadLibraryA` from kernel32.dll
+        // We need the raw address of `LoadLibraryA` within `kernel32.dll`.
+        // However, when we import `LoadLibraryA` from the `windows` crate,
+        // we aren't getting the raw address. Instead, we're getting
+        // an indirect reference through our injector's import address table (IAT).
+        // This IAT entry only exists in our injector process, not in the game process.
+        // `GetProcAddress` returns the raw address of `LoadLibraryA` inside `kernel32.dll`,
+        // which is valid in both processes since `kernel32.dll` is loaded at the same location in each.
         let kernel_handle =
             GetModuleHandleA(s!("kernel32.dll")).context("failed to get handle to kernel32.dll")?;
         let load_library_addr = GetProcAddress(kernel_handle, s!("LoadLibraryA"))
@@ -113,11 +119,11 @@ unsafe fn inject_dll(process: HANDLE, dll_path: &CStr) -> Result<()> {
         // However, the function pointer for `LoadLibraryA` must have the type
         // `fn(*mut c_void) -> u32` when using it with `CreateRemoteThread`.
         // For our purpose of compiling to a 32-bit target, these types are ABI compatible:
-        // - the same calling convention is used
-        // - inputs: both `PCSTR` and `*mut c_void` are 32-bit pointers,
+        // - The same calling convention is used.
+        // - Inputs: both `PCSTR` and `*mut c_void` are 32-bit pointers,
         //   have the same alignment requirements, and
-        //   get interpreted as raw memory addresses
-        // - outputs: `u32` and `*mut c_void` are both 32 bits
+        //   get interpreted as raw memory addresses.
+        // - Outputs: `u32` and `*mut c_void` are both 32 bits.
         // So, it is reasonable to transmute here.
         let thread_process: ThreadStartRoutine = transmute(load_library_addr);
 

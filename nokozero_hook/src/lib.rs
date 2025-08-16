@@ -72,7 +72,8 @@ extern "system" fn DllMain(_h_module: *mut c_void, reason: u32, _reserved: *mut 
             let original_fn: GetJoypadInputFn = unsafe { transmute(GET_JOYPAD_INPUT_ADDR) };
             GET_JOYPAD_INPUT_ORIGINAL.set(original_fn).unwrap();
 
-            // We use the address to calculate the relative offset for an x86 CALL instruction.
+            // We use the address of `get_joypad_input_hook` to calculate
+            // the relative offset for an x86 CALL instruction.
             // Since we won't reconstruct a pointer from this address, we don't expose provenance
             // via `get_joypad_input_hook as usize` or, equivalently,
             // `(get_joypad_input_hook as *const ()).expose_provenance()`.
