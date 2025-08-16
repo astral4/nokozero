@@ -64,22 +64,20 @@ extern "stdcall" fn get_joypad_input_hook(base: InputFlags) -> InputFlags {
 #[unsafe(no_mangle)]
 extern "system" fn DllMain(_h_module: *mut c_void, reason: u32, _reserved: *mut c_void) -> BOOL {
     if reason == DLL_PROCESS_ATTACH {
-        unsafe {
-            // We save the original function in case it is needed.
-            // There is a race condition when the hooked function is called
-            // before `OnceLock::set()` completes. We assume this won't happen;
-            // i.e. no other threads are executing game code during `DLL_PROCESS_ATTACH`.
-            let original_fn: GetJoypadInputFn = unsafe { transmute(GET_JOYPAD_INPUT_ADDR) };
-            GET_JOYPAD_INPUT_ORIGINAL.set(original_fn).unwrap();
+        // We save the original function in case it is needed.
+        // There is a race condition when the hooked function is called
+        // before `OnceLock::set()` completes. We assume this won't happen;
+        // i.e. no other threads are executing game code during `DLL_PROCESS_ATTACH`.
+        let original_fn: GetJoypadInputFn = unsafe { transmute(GET_JOYPAD_INPUT_ADDR) };
+        GET_JOYPAD_INPUT_ORIGINAL.set(original_fn).unwrap();
 
-            // We use the address of `get_joypad_input_hook` to calculate
-            // the relative offset for an x86 CALL instruction.
-            // Since we won't reconstruct a pointer from this address, we don't expose provenance
-            // via `get_joypad_input_hook as usize` or, equivalently,
-            // `(get_joypad_input_hook as *const ()).expose_provenance()`.
-            let hook_addr = (get_joypad_input_hook as *const ()).addr();
-            unsafe { patch_call(GET_JOYPAD_INPUT_HOOK_ADDR, hook_addr) };
-        }
+        // We use the address of `get_joypad_input_hook` to calculate
+        // the relative offset for an x86 CALL instruction.
+        // Since we won't reconstruct a pointer from this address, we don't expose provenance
+        // via `get_joypad_input_hook as usize` or, equivalently,
+        // `(get_joypad_input_hook as *const ()).expose_provenance()`.
+        let hook_addr = (get_joypad_input_hook as *const ()).addr();
+        unsafe { patch_call(GET_JOYPAD_INPUT_HOOK_ADDR, hook_addr) };
     }
 
     BOOL(1) // Return `TRUE`
