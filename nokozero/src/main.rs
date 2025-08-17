@@ -22,15 +22,14 @@ fn main() -> Result<()> {
 
     if args.contains(["-h", "--help"]) {
         println!(
-            "nokozero
--h, --help        print this message
--d, --game-dir    path to directory containing game files"
+            "nokozero\n\
+             -h, --help        print this message\n\
+             -d, --game-dir    path to directory containing game files"
         );
         return Ok(());
     }
 
     let game_dir_path: PathBuf = args.value_from_str(["-d", "--game-dir"])?;
-
     if !game_dir_path.is_dir() {
         bail!("`-d`/`--game-dir`: path does not point to a directory");
     }
