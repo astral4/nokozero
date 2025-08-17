@@ -18,9 +18,8 @@ type ThreadStartRoutine = unsafe extern "system" fn(*mut c_void) -> u32;
 
 fn main() -> Result<()> {
     unsafe {
-        // TODO: rework path reading
-        let game_path = CString::new("C:\\users\\user\\th15\\th15.exe")?;
-        let dll_path = CString::new("C:\\users\\user\\th15\\nokozero_hook.dll")?;
+        let game_path = CString::new(var("GAME_PATH").unwrap()).unwrap();
+        let hook_path = CString::new(var("HOOK_PATH").unwrap()).unwrap();
 
         #[allow(clippy::cast_possible_truncation)]
         let startup_info = STARTUPINFOA {
@@ -46,7 +45,8 @@ fn main() -> Result<()> {
 
         // If DLL injection fails, we clean up all existing handles
         // before returning the error value.
-        let result = inject_dll(process_info.hProcess, &dll_path).context("failed to inject DLL");
+        let result = inject_dll(process_info.hProcess, &hook_path)
+            .context("failed to inject hooking library");
 
         // Resume the main thread only after DLL injection is complete
         if ResumeThread(process_info.hThread) == u32::MAX {
