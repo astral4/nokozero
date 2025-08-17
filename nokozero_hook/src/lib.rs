@@ -1,7 +1,7 @@
 use bitflags::bitflags;
 use std::ffi::c_void;
 use std::mem::transmute;
-use std::ptr;
+use std::ptr::{copy_nonoverlapping, read_volatile};
 use std::sync::OnceLock;
 use windows::Win32::System::Memory::{
     PAGE_EXECUTE_READWRITE, PAGE_PROTECTION_FLAGS, VirtualProtect,
@@ -49,7 +49,7 @@ extern "stdcall" fn get_joypad_input_hook(base: InputFlags) -> InputFlags {
     // However, according to the strict provenance model, both approaches
     // are technically undefined behavior because we're creating a pointer
     // from an integer that never had valid provenance to begin with.
-    let game_thread = unsafe { ptr::read_volatile(GAME_THREAD_PTR as *const usize) };
+    let game_thread = unsafe { read_volatile(GAME_THREAD_PTR as *const usize) };
 
     if game_thread != 0 {
         // TODO: send inputs
@@ -109,7 +109,7 @@ unsafe fn patch_bytes(dst: *mut u8, src: &[u8]) {
         )
         .unwrap();
 
-        ptr::copy_nonoverlapping(src.as_ptr(), dst, src.len());
+        copy_nonoverlapping(src.as_ptr(), dst, src.len());
 
         VirtualProtect(dst.cast(), src.len(), old_protect, &raw mut temp).unwrap();
     }
