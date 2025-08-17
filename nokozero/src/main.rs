@@ -128,6 +128,10 @@ fn add_command_context<T>(res: std::io::Result<T>, command_name: &str) -> Result
 /// Runs the game executable at the provided path using Wine.
 /// This function returns an error if running the `wine` command was unsuccessful.
 fn start_game(launcher_path: &Path, game_path: &Path, hook_path: &Path) -> Result<()> {
+    // When running a Windows program through Wine, the Linux filesystem is mapped to the Z: drive.
+    // For example, the Linux root directory "/" becomes "Z:\".
+    // `game_path` and `hook_path` refer to files on our Linux filesystem,
+    // but we need to convert them for the launcher executable running under Wine.
     let status = Command::new("wine")
         .arg(launcher_path)
         .env("GAME_PATH", unix_to_windows_path(game_path))
