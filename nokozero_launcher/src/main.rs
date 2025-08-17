@@ -1,5 +1,6 @@
 use anyhow::{Context, Result, bail};
 use scopeguard::guard;
+use std::env::var;
 use std::ffi::{CStr, CString, c_void};
 use std::mem::transmute;
 use windows::Win32::Foundation::{CloseHandle, GetLastError, HANDLE, WAIT_OBJECT_0};
@@ -99,7 +100,7 @@ unsafe fn inject_dll(process: HANDLE, dll_path: &CStr) -> Result<()> {
             dll_path_len,
             None,
         )
-        .context("failed to write DLL path to game process memory")?;
+        .context("failed to write hooking library path to game process memory")?;
 
         // We need the raw address of `LoadLibraryA` within `kernel32.dll`.
         // However, when we import `LoadLibraryA` from the `windows` crate,
@@ -137,27 +138,27 @@ unsafe fn inject_dll(process: HANDLE, dll_path: &CStr) -> Result<()> {
             0,
             None,
         )
-        .context("failed to create DLL injection thread")?;
+        .context("failed to create hook injection thread")?;
 
         // Wait for the remote thread to complete
         if WaitForSingleObject(thread_handle, INFINITE) != WAIT_OBJECT_0 {
             CloseHandle(thread_handle)?;
-            bail!("failed to wait for DLL injection thread");
+            bail!("failed to wait for hook injection thread");
         }
 
         // Check if `LoadLibraryA` succeeded
         let mut exit_code = 0u32;
         GetExitCodeThread(thread_handle, &raw mut exit_code)
-            .context("failed to get DLL injection thread exit code")?;
+            .context("failed to get hook injection thread exit code")?;
 
-        CloseHandle(thread_handle).context("failed to clean up DLL injection thread handle")?;
+        CloseHandle(thread_handle).context("failed to clean up hook injection thread handle")?;
 
         if exit_code == 0 {
             GetLastError()
                 .to_hresult()
                 .ok()
-                .context("failed to inject DLL; LoadLibraryA returned error")?;
-            bail!("failed to inject DLL; LoadLibraryA returned error");
+                .context("failed to inject hooking library; LoadLibraryA returned error")?;
+            bail!("failed to inject hooking library; LoadLibraryA returned error");
         }
 
         drop(cleanup);
