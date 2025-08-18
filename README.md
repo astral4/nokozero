@@ -3,7 +3,7 @@
 `nokozero` is a reinforcement learning agent that plays Touhou 15 (東方紺珠伝 ～ Legacy of Lunatic Kingdom).
 This project aims to develop agents capable of achieving LNN; i.e. playing the entire game on the hardest difficulty without losing lives or using bombs.
 
-Read the [setup guide](SETUP.md) for instructions on getting started!
+Read the [setup guide](SETUP.md) for instructions on getting started! Check out the [FAQ](FAQ.md) for answers to common questions and troubleshooting.
 
 ## License
 
