@@ -1,8 +1,10 @@
 use anyhow::{Context, Result, anyhow, bail};
 use nix::errno::Errno;
 use nix::unistd::Pid;
+use std::array;
 use std::fs::read_to_string;
 use std::io::IoSliceMut;
+use std::slice;
 use tap::Pipe;
 use zerocopy::{FromBytes, Immutable, KnownLayout};
 
@@ -619,7 +621,7 @@ impl<const N: usize> Data<N> {
             // but we ensure `buffers` lives at least as long as `io_slices`
             // by storing them together in the `Data` struct.
             // Also, the struct fields are ordered so that `io_slices` is dropped before `buffers`.
-            IoSliceMut::new(std::slice::from_raw_parts_mut(buf.as_mut_ptr(), buf.len()))
+            IoSliceMut::new(slice::from_raw_parts_mut(buf.as_mut_ptr(), buf.len()))
         });
 
         Self {
@@ -637,7 +639,7 @@ impl<const N: usize> Data<N> {
     #[cfg(target_os = "linux")]
     fn read(&mut self, pid: Pid, locations: &[usize; N]) -> Result<()> {
         // Construct `RemoteIoVec` from base address and stored size
-        let locations: [_; N] = std::array::from_fn(|i| RemoteIoVec {
+        let locations: [_; N] = array::from_fn(|i| RemoteIoVec {
             base: locations[i],
             len: self.sizes[i],
         });

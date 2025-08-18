@@ -3,7 +3,7 @@ use nix::unistd::Pid;
 use nokozero::reader::StateReader;
 use pico_args::Arguments;
 use std::fs::{canonicalize, write};
-use std::io::ErrorKind;
+use std::io::{ErrorKind, Result as IoResult};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{
@@ -112,7 +112,7 @@ fn main() -> Result<()> {
 
 /// Adds context to the result of running a command if the result is `Err(_)`.
 /// A specific message is included if the command was not found.
-fn add_command_context<T>(res: std::io::Result<T>, command_name: &str) -> Result<T> {
+fn add_command_context<T>(res: IoResult<T>, command_name: &str) -> Result<T> {
     res.map_err(|e| {
         let not_found = e.kind() == ErrorKind::NotFound;
         let err = Error::new(e);
