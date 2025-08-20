@@ -11,7 +11,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
-bitflags = "2.9.1"
+bitflags = "2.9.2"
 windows = { workspace = true, features = ["Win32_System_SystemServices"] }
 
 [lib]
