@@ -1,17 +1,15 @@
-use anyhow::{Context, Error, Result, bail};
-use nix::unistd::Pid;
-use nokozero::reader::StateReader;
+use anyhow::{bail, Context, Error, Result};
 use pico_args::Arguments;
 use std::fs::{canonicalize, write};
 use std::io::{ErrorKind, Result as IoResult};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{
-    Arc,
     atomic::{AtomicBool, Ordering},
+    Arc,
 };
 use std::thread::sleep;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tap::Pipe;
 
 const GAME_LAUNCHER: &[u8] = include_bytes!(env!("LAUNCHER_PATH"));
@@ -59,8 +57,10 @@ fn main() -> Result<()> {
     // Run game using Wine
     start_game(&launcher_path, &game_path, &hook_path).context("failed to start game")?;
 
-    let game_pid = get_game_pid().context("failed to query game process ID")?;
-    println!("Found game process with PID {game_pid}");
+    if !game_process_exists() {
+        bail!("game process not found after launch");
+    }
+    println!("Found game process");
 
     // Set up graceful shutdown
     let is_running = Arc::new(AtomicBool::new(true));
@@ -72,37 +72,14 @@ fn main() -> Result<()> {
     })
     .context("failed to set Ctrl+C handler")?;
 
-    // Create game state reader
-    let mut reader = StateReader::new(game_pid).context("failed to create game state reader")?;
-
-    // Main game loop - read state every 6 frames
-    let frame_duration = Duration::from_millis(100);
-    let mut last_read = Instant::now();
-
-    println!("Starting game state monitoring");
-
+    // Wait for game to exit
     while is_running.load(Ordering::Relaxed) {
-        let now = Instant::now();
+        sleep(Duration::from_millis(100));
 
-        if now.duration_since(last_read) >= frame_duration {
-            match reader.get_state() {
-                Ok(Some(state)) => {
-                    println!("{state:#?}");
-                }
-                Ok(None) => {}
-                Err(e) => {
-                    eprintln!("Failed to read game state: {e:?}");
-                    if get_game_pid().is_err() {
-                        println!("Game process terminated");
-                        break;
-                    }
-                }
-            }
-
-            last_read = now;
+        if !game_process_exists() {
+            println!("Game process terminated");
+            break;
         }
-
-        sleep(Duration::from_millis(10));
     }
 
     println!("Shutdown complete");
@@ -165,37 +142,10 @@ fn unix_to_windows_path(path: &Path) -> String {
     )
 }
 
-/// Finds the ID of the game process.
-/// Returns an error if:
-/// - running the `pgrep` command was unsuccessful
-/// - parsing `pgrep` output was unsuccessful
-/// - no processes matching the game name were found
-/// - multiple processes matching the game name were found
-fn get_game_pid() -> Result<Pid> {
-    let output = Command::new("pgrep")
+/// Returns `true` if a game process is currently running.
+fn game_process_exists() -> bool {
+    Command::new("pgrep")
         .arg("th15.exe")
         .output()
-        .pipe(|res| add_command_context(res, "pgrep"))?;
-
-    if !output.status.success() {
-        match output.status.code() {
-            Some(1) => bail!("no game process found"),
-            Some(code) => bail!("pgrep failed with status code {code}"),
-            None => bail!("pgrep was terminated by a signal"),
-        }
-    }
-
-    let pids: Vec<i32> = String::from_utf8(output.stdout)
-        .context("pgrep output was not valid UTF-8")?
-        .lines()
-        .filter(|line| !line.is_empty())
-        .map(str::parse)
-        .collect::<Result<_, _>>()
-        .context("failed to parse pgrep output as i32 values")?;
-
-    match pids.len() {
-        0 => bail!("no game process found"),
-        1 => Ok(Pid::from_raw(pids[0])),
-        _ => bail!("multiple game processes found"),
-    }
+        .is_ok_and(|output| output.status.success())
 }

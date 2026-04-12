@@ -1,8 +1,14 @@
+pub mod reader;
+
 use bitflags::bitflags;
+use reader::StateReader;
 use std::ffi::c_void;
 use std::mem::transmute;
 use std::ptr::{copy_nonoverlapping, read_volatile};
-use std::sync::OnceLock;
+use std::sync::{
+    OnceLock,
+    atomic::{AtomicU32, Ordering},
+};
 use windows::Win32::System::Memory::{
     PAGE_EXECUTE_READWRITE, PAGE_PROTECTION_FLAGS, VirtualProtect,
 };
@@ -15,7 +21,11 @@ const GAME_THREAD_PTR: usize = 0x4e9a94;
 const GET_JOYPAD_INPUT_ADDR: usize = 0x401b20;
 const GET_JOYPAD_INPUT_HOOK_ADDR: usize = 0x4022fa;
 
+/// The number of frames between each game state read.
+const READ_INTERVAL: u32 = 6;
+
 static GET_JOYPAD_INPUT_ORIGINAL: OnceLock<GetJoypadInputFn> = OnceLock::new();
+static READER: OnceLock<StateReader> = OnceLock::new();
 
 bitflags! {
     #[repr(transparent)]
@@ -52,6 +62,16 @@ extern "stdcall" fn get_joypad_input_hook(base: InputFlags) -> InputFlags {
     let game_thread = unsafe { read_volatile(GAME_THREAD_PTR as *const usize) };
 
     if game_thread != 0 {
+        static FRAME_COUNT: AtomicU32 = AtomicU32::new(0);
+        let frame = FRAME_COUNT.fetch_add(1, Ordering::Relaxed);
+
+        if frame % READ_INTERVAL == 0 {
+            let reader = READER.get().expect("reader should be initialized");
+            if let Some(_state) = reader.get_state() {
+                // TODO: send game state
+            }
+        }
+
         // TODO: send inputs
         InputFlags::SHOOT | base
     } else if let Some(original) = GET_JOYPAD_INPUT_ORIGINAL.get() {
@@ -64,6 +84,8 @@ extern "stdcall" fn get_joypad_input_hook(base: InputFlags) -> InputFlags {
 #[unsafe(no_mangle)]
 extern "system" fn DllMain(_h_module: *mut c_void, reason: u32, _reserved: *mut c_void) -> BOOL {
     if reason == DLL_PROCESS_ATTACH {
+        READER.set(StateReader::new()).unwrap();
+
         // We save the original function in case it is needed.
         // There is a race condition when the hooked function is called
         // before `OnceLock::set()` completes. We assume this won't happen;
