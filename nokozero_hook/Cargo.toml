@@ -11,8 +11,8 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
-bitflags = "2.9.2"
-windows = { workspace = true, features = ["Win32_System_LibraryLoader", "Win32_System_SystemServices"] }
+bitflags = "2.11.0"
+windows = { workspace = true, features = ["Win32_System_LibraryLoader", "Win32_System_SystemInformation", "Win32_System_SystemServices"] }
 
 [lib]
 crate-type = ["cdylib"]

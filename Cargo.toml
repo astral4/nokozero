@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["nokozero", "nokozero_hook", "nokozero_launcher"]
+members = ["nokozero", "nokozero_hook"]
 
 [workspace.package]
 version = "0.0.0"
@@ -13,8 +13,8 @@ license = "MIT OR Apache-2.0"
 publish = false
 
 [workspace.dependencies]
-anyhow = "1.0.99"
-windows = { version = "0.61.3", features = ["Win32_System_Memory"] }
+anyhow = "1.0.102"
+windows = { version = "0.62.2", features = ["Win32_System_Memory"] }
 
 [workspace.lints.rust]
 async_fn_in_trait = "allow"

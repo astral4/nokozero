@@ -1,3 +1,4 @@
+mod proxy;
 pub mod reader;
 
 use bitflags::bitflags;
