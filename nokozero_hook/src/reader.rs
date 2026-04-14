@@ -1,5 +1,4 @@
 use std::ptr::with_exposed_provenance;
-use windows::Win32::System::LibraryLoader::GetModuleHandleA;
 
 const WORLD_WIDTH: f32 = 384.;
 const WORLD_HEIGHT: f32 = 448.;
@@ -53,6 +52,7 @@ const CURVE_LASER_NODE_ANGLE: usize = 0x18;
 const CURVE_LASER_NODE_SPEED: usize = 0x1c;
 const CURVE_LASER_NODE_BYTE_LEN: usize = 0x20;
 
+const GAME_THREAD_PTR: usize = 0xe9a94;
 const PLAYER_PTR: usize = 0xe9bb8;
 const PLAYER_POS: usize = 0x618;
 const PLAYER_IS_FOCUSED: usize = 0x16240;
@@ -158,29 +158,25 @@ pub struct Player {
 }
 
 impl StateReader {
-    /// Instantiates the game state reader.
+    /// Creates a new reader with the given module base address.
     ///
-    /// # Panics
-    /// This function panics if the game module handle could not be obtained.
+    /// # Safety
+    /// `base` must point to the start of the game's loaded PE image
+    /// and must remain valid for the lifetime of the `StateReader`.
     #[must_use]
-    pub fn new() -> Self {
-        let module = unsafe { GetModuleHandleA(None) }.expect("game module handle should be valid");
-        // The `windows` crate represents HMODULE as `isize`,
-        // but the underlying value is the PE image base address.
-        let base = with_exposed_provenance(module.0 as usize);
+    pub unsafe fn new(base: *const u8) -> Self {
         Self { base }
     }
 
-    /// Gets the current state of the game, including
-    /// the player, bullets, enemies, lasers, and items.
+    /// Returns `true` if the game's main loop is active, and `false` otherwise.
+    #[must_use]
+    pub fn is_game_active(&self) -> bool {
+        unsafe { read_field::<usize>(self.base, GAME_THREAD_PTR) != 0 }
+    }
+
+    /// Gets the current state of the game, including the player, bullets, enemies, lasers, and items.
     #[must_use]
     pub fn get_state(&self) -> Option<GameState> {
-        // Note on provenance: reads from the PE image derive provenance
-        // from the module handle. When following game pointers into
-        // dynamically allocated memory, we reconstitute pointers via
-        // `with_exposed_provenance`. This is inherent to DLL injection
-        // and cannot be made fully sound under Rust's provenance model.
-        // See also the note on provenance in `lib.rs`.
         let bullets_ptr = unsafe { read_ptr(self.base, BULLETS_PTR) };
         let enemies_ptr = unsafe { read_ptr(self.base, ENEMIES_PTR) };
         let items_ptr = unsafe { read_ptr(self.base, ITEMS_PTR) };
@@ -203,12 +199,6 @@ impl StateReader {
             lasers: get_lasers(lasers_ptr),
             player: get_player(player_ptr),
         })
-    }
-}
-
-impl Default for StateReader {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
