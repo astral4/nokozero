@@ -2,6 +2,7 @@ use std::ptr::with_exposed_provenance;
 
 const WORLD_WIDTH: f32 = 384.;
 const WORLD_HEIGHT: f32 = 448.;
+const HALF_WORLD_WIDTH: f32 = WORLD_WIDTH / 2.;
 
 // Locations and offsets for reading data in process memory
 const BULLETS_PTR: usize = 0xe9a6c;
@@ -171,7 +172,7 @@ impl StateReader {
     /// Returns `true` if the game's main loop is active, and `false` otherwise.
     #[must_use]
     pub fn is_game_active(&self) -> bool {
-        unsafe { read_field::<usize>(self.base, GAME_THREAD_PTR) != 0 }
+        (unsafe { read_field::<usize>(self.base, GAME_THREAD_PTR) }) != 0
     }
 
     /// Gets the current state of the game, including the player, bullets, enemies, lasers, and items.
@@ -225,8 +226,8 @@ fn get_bullets(bullets_ptr: *const u8) -> Vec<Bullet> {
             // Check if bullet is in bounds
             if pos_y >= -hitbox_radius
                 && pos_y <= WORLD_HEIGHT + hitbox_radius
-                && pos_x >= const { -WORLD_WIDTH / 2. } - hitbox_radius
-                && pos_x <= const { WORLD_WIDTH / 2. } + hitbox_radius
+                && pos_x >= -HALF_WORLD_WIDTH - hitbox_radius
+                && pos_x <= HALF_WORLD_WIDTH + hitbox_radius
             {
                 let [vel_x, vel_y] = unsafe { read_field::<[f32; 2]>(data, BULLET_VEL) };
 

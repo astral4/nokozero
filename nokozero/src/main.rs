@@ -38,7 +38,7 @@ fn main() -> Result<()> {
         );
     }
 
-    // Deploy the hook library as a dinput8.dll proxy in the game directory.
+    // Deploy the hook library as a `dinput8.dll` proxy in the game directory.
     // Windows DLL search order makes it load before the real system DLL, so we can do hooking.
     write(game_dir.join("dinput8.dll"), HOOK_DLL).context("failed to deploy hook library")?;
 
