@@ -1,13 +1,10 @@
 use anyhow::{Context, Error, Result, bail};
 use pico_args::Arguments;
-use std::fs::write;
+use std::env::var;
+use std::fs::{create_dir_all, write};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
+use std::process::{Child, Command, exit};
 use std::thread::sleep;
 use std::time::Duration;
 
@@ -19,22 +16,28 @@ fn main() -> Result<()> {
     if args.contains(["-h", "--help"]) {
         println!(
             "nokozero\n\
-             -h, --help        print this message\n\
-             -d, --game-dir    path to directory containing game files"
+             -h, --help          print this message\n\
+             -d, --game-dir      path to directory containing game files\n\
+             -n, --instances     number of game instances to run, each with a separate custom Wine prefix\n\
+                                 (default: 1, with default Wine prefix)"
         );
         return Ok(());
     }
 
     let game_dir: PathBuf = args.value_from_str(["-d", "--game-dir"])?;
+    let num_instances: Option<usize> = args.opt_value_from_str(["-n", "--instances"])?;
+
     if !game_dir.is_dir() {
         bail!("`-d`/`--game-dir`: path does not point to a directory");
     }
-
     if !game_dir.join("th15.exe").is_file() {
         bail!(
             "game executable not found; no file exists at {}",
             game_dir.join("th15.exe").display()
         );
+    }
+    if num_instances == Some(0) {
+        bail!("`-n`/`--instances`: must be at least 1");
     }
 
     // Deploy the hook library as a `dinput8.dll` proxy in the game directory.
@@ -49,30 +52,56 @@ fn main() -> Result<()> {
         game_dir.join("th15.exe")
     };
 
-    start_game(&exe, &game_dir).context("failed to start game")?;
+    // When `-n` is specified, each instance gets its own Wine prefix for process isolation
+    let prefix_dir = if num_instances.is_some() {
+        let home = var("HOME").context("HOME environment variable not set")?;
+        let dir = PathBuf::from(home).join(".local/share/nokozero/prefixes");
+        create_dir_all(&dir).context("failed to create prefix directory")?;
+        Some(dir)
+    } else {
+        None
+    };
 
-    if !game_process_exists() {
-        bail!("game process not found after launch");
-    }
-    println!("Found game process");
-
-    // Set up graceful shutdown
-    let is_running = Arc::new(AtomicBool::new(true));
-    let r = is_running.clone();
-
-    ctrlc::set_handler(move || {
-        println!("\nReceived Ctrl+C, shutting down...");
-        r.store(false, Ordering::Relaxed);
+    // Suppress the default SIGINT behavior so we can wait for children to exit.
+    // Children receive SIGINT from the process group and shut down on their own.
+    ctrlc::set_handler({
+        let mut times = 0u32;
+        move || {
+            times += 1;
+            if times == 1 {
+                eprintln!("\nShutting down, waiting for instances to exit...");
+                eprintln!("Press Ctrl+C again to force exit.");
+            } else {
+                exit(1);
+            }
+        }
     })
     .context("failed to set Ctrl+C handler")?;
 
-    // Wait for game to exit
-    while is_running.load(Ordering::Relaxed) {
-        sleep(Duration::from_millis(100));
+    let count = num_instances.unwrap_or(1);
+    let mut children = Vec::with_capacity(count);
+    for i in 0..count {
+        let prefix = prefix_dir.as_ref().map(|dir| dir.join(i.to_string()));
+        let child = spawn_game(&exe, &game_dir, prefix.as_deref())
+            .with_context(|| format!("failed to start instance {i}"))?;
+        children.push((i, child));
+    }
 
-        if !game_process_exists() {
-            println!("Game process terminated");
-            break;
+    // Wait for all instances to exit
+    while !children.is_empty() {
+        children.retain_mut(|(i, child)| match child.try_wait() {
+            Ok(Some(status)) => {
+                println!("Instance {i} exited ({status})");
+                false
+            }
+            Ok(None) => true,
+            Err(e) => {
+                eprintln!("Instance {i}: {e}");
+                false
+            }
+        });
+        if !children.is_empty() {
+            sleep(Duration::from_millis(100));
         }
     }
 
@@ -81,42 +110,28 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// Runs the game executable at the provided path using Wine.
-fn start_game(exe: &Path, game_dir: &Path) -> Result<()> {
-    let status = Command::new("wine")
-        .arg(exe)
+/// Spawns a game instance under Wine and returns the child process handle.
+fn spawn_game(exe: &Path, game_dir: &Path, wine_prefix: Option<&Path>) -> Result<Child> {
+    let mut cmd = Command::new("wine");
+    cmd.arg(exe)
         .current_dir(game_dir)
         .env("WINEDLLOVERRIDES", "dinput8=n,b") // Load hook library, then fall back to the built-in real DLL
         .env("LC_ALL", "ja_JP.UTF-8") // Run with locale set to Japanese
         .env("WINEDEBUG", "-all") // Disable Wine's debug logging
         .env("WINEESYNC", "1") // Enable esync optimization
-        .env("STAGING_SHARED_MEMORY", "1") // Use shared memory to optimize wineserver calls
-        .status()
-        .map_err(|e| {
-            let not_found = e.kind() == ErrorKind::NotFound;
-            let err = Error::new(e);
-            if not_found {
-                err.context("wine command not found")
-            } else {
-                err
-            }
-        })
-        .context("failed to run wine command")?;
+        .env("STAGING_SHARED_MEMORY", "1"); // Use shared memory to optimize wineserver calls
 
-    if !status.success() {
-        match status.code() {
-            Some(code) => bail!("Wine failed with status code {code}"),
-            None => bail!("Wine was terminated by a signal"),
-        }
+    if let Some(prefix) = wine_prefix {
+        cmd.env("WINEPREFIX", prefix);
     }
 
-    Ok(())
-}
-
-/// Returns `true` if a game process is currently running.
-fn game_process_exists() -> bool {
-    Command::new("pgrep")
-        .arg("th15.exe")
-        .output()
-        .is_ok_and(|output| output.status.success())
+    cmd.spawn().map_err(|e| {
+        let not_found = e.kind() == ErrorKind::NotFound;
+        let err = Error::new(e);
+        if not_found {
+            err.context("wine command not found")
+        } else {
+            err
+        }
+    })
 }
