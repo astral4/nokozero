@@ -52,29 +52,18 @@ Follow the Rust [installation instructions](https://www.rust-lang.org/tools/inst
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```
 
-Optionally, you can add the Rust [compilation target](https://doc.rust-lang.org/stable/rustc/platform-support/windows-gnu.html) `i686-pc-windows-gnu` for Windows on 32-bit x86. Otherwise, Rust will automatically install components for `i686-pc-windows-gnu` when compiling the `nokozero_hook` and `nokozero_launcher` crates.
+Optionally, you can add the Rust [compilation target](https://doc.rust-lang.org/stable/rustc/platform-support/windows-gnu.html) `i686-pc-windows-gnu` for Windows on 32-bit x86. Otherwise, Rust will automatically install components for `i686-pc-windows-gnu` when compiling the `nokozero_hook` crate.
 
 ```
 rustup target add i686-pc-windows-gnu
 ```
 
-## Step 5: Compile utility crates
+## Step 5: Compile crates
 
-`nokozero` uses two utility crates to control the game:
-- `nokozero_hook`
-  - compiles to a 32-bit Windows library
-  - intercepts the game's input reading for programmatic control
-- `nokozero_launcher`
-  - compiles to a 32-bit Windows executable
-  - launches the game executable and injects the input hooking library
-
-These crates must be compiled *before* compiling the main crate `nokozero`.
+`nokozero_hook` compiles to a 32-bit Windows library and intercepts the game's input reading for programmatic control. It must be compiled *before* compiling the main crate `nokozero`.
 
 Assuming the current working directory is the root of this project:
 
 ```
-cargo build -p nokozero_launcher --target i686-pc-windows-gnu --release
 cargo build -p nokozero_hook --target i686-pc-windows-gnu --release
 ```
-
-If the current working directory is the root of a utility crate, simply run `cargo build --release` to build that crate.

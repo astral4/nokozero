@@ -12,7 +12,7 @@ publish.workspace = true
 
 [dependencies]
 bitflags = "2.11.0"
-windows = { workspace = true, features = ["Win32_System_LibraryLoader", "Win32_System_SystemInformation", "Win32_System_SystemServices"] }
+windows = { version = "0.62.2", features = ["Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_System_SystemInformation", "Win32_System_SystemServices"] }
 
 [lib]
 crate-type = ["cdylib"]

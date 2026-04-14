@@ -1,7 +1,7 @@
 use anyhow::{Context, Error, Result, bail};
 use pico_args::Arguments;
 use std::fs::write;
-use std::io::{ErrorKind, Result as IoResult};
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{
@@ -10,7 +10,6 @@ use std::sync::{
 };
 use std::thread::sleep;
 use std::time::Duration;
-use tap::Pipe;
 
 const HOOK_DLL: &[u8] = include_bytes!(env!("HOOK_PATH"));
 
@@ -82,21 +81,6 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// Adds context to the result of running a command if the result is `Err(_)`.
-/// A specific message is included if the command was not found.
-fn add_command_context<T>(res: IoResult<T>, command_name: &str) -> Result<T> {
-    res.map_err(|e| {
-        let not_found = e.kind() == ErrorKind::NotFound;
-        let err = Error::new(e);
-        if not_found {
-            err.context(format!("{command_name} command not found"))
-        } else {
-            err
-        }
-    })
-    .with_context(|| format!("failed to run {command_name} command"))
-}
-
 /// Runs the game executable at the provided path using Wine.
 fn start_game(exe: &Path, game_dir: &Path) -> Result<()> {
     let status = Command::new("wine")
@@ -108,7 +92,16 @@ fn start_game(exe: &Path, game_dir: &Path) -> Result<()> {
         .env("WINEESYNC", "1") // Enable esync optimization
         .env("STAGING_SHARED_MEMORY", "1") // Use shared memory to optimize wineserver calls
         .status()
-        .pipe(|res| add_command_context(res, "wine"))?;
+        .map_err(|e| {
+            let not_found = e.kind() == ErrorKind::NotFound;
+            let err = Error::new(e);
+            if not_found {
+                err.context("wine command not found")
+            } else {
+                err
+            }
+        })
+        .context("failed to run wine command")?;
 
     if !status.success() {
         match status.code() {

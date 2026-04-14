@@ -12,10 +12,6 @@ repository = "https://github.com/astral4/nokozero"
 license = "MIT OR Apache-2.0"
 publish = false
 
-[workspace.dependencies]
-anyhow = "1.0.102"
-windows = { version = "0.62.2", features = ["Win32_System_Memory"] }
-
 [workspace.lints.rust]
 async_fn_in_trait = "allow"
 ffi_unwind_calls = "warn"
