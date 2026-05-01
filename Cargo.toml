@@ -45,3 +45,4 @@ pedantic = "warn"
 [profile.release]
 lto = "thin"
 strip = true
+panic = "abort"
