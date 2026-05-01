@@ -62,8 +62,15 @@ rustup target add i686-pc-windows-gnu
 
 `nokozero_hook` compiles to a 32-bit Windows library and intercepts the game's input reading for programmatic control. It must be compiled *before* compiling the main crate `nokozero`.
 
-Assuming the current working directory is the root of this project:
+This repository comes with a [justfile](https://github.com/casey/just) for build orchestration. From the project root:
+
+```
+just build
+```
+
+Equivalently, without `just`:
 
 ```
 cargo build -p nokozero_hook --target i686-pc-windows-gnu --release
+cargo build -p nokozero --release
 ```
