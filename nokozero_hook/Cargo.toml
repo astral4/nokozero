@@ -11,8 +11,9 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
-bitflags = "2.11.0"
-windows = { version = "0.62.2", features = [
+bitflags = "2.11.1"
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
     "Win32_System_Diagnostics_Debug",
     "Win32_System_LibraryLoader",
     "Win32_System_Memory",

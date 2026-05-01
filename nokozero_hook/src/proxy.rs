@@ -2,13 +2,12 @@
 // Windows DLL search order makes it load before the real system DLL, so we can do hooking.
 // We forward all `dinput8.dll` exports to the system DLL.
 
-use std::ffi::c_void;
+use std::ffi::{CStr, c_void};
 use std::mem::transmute;
 use std::sync::LazyLock;
-use windows::Win32::Foundation::{HMODULE, MAX_PATH};
-use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryA};
-use windows::Win32::System::SystemInformation::GetSystemDirectoryA;
-use windows::core::{PCSTR, s};
+use windows_sys::Win32::Foundation::{HMODULE, MAX_PATH};
+use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryA};
+use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryA;
 
 struct ModuleHandle(HMODULE);
 
@@ -20,17 +19,18 @@ unsafe impl Sync for ModuleHandle {}
 static MODULE: LazyLock<ModuleHandle> = LazyLock::new(|| {
     const SUFFIX: &[u8] = b"\\dinput8.dll\0";
     let mut path = [0u8; MAX_PATH as usize];
-    let len = unsafe { GetSystemDirectoryA(Some(&mut path)) } as usize;
+    let len = unsafe { GetSystemDirectoryA(path.as_mut_ptr(), MAX_PATH) } as usize;
     assert!(len > 0, "failed to get system directory");
     path[len..][..const { SUFFIX.len() }].copy_from_slice(SUFFIX);
-    let module = unsafe { LoadLibraryA(PCSTR::from_raw(path.as_ptr())) }
-        .expect("failed to load real dinput8.dll");
+    let module = unsafe { LoadLibraryA(path.as_ptr()) };
+    assert!(!module.is_null(), "failed to load real dinput8.dll");
     ModuleHandle(module)
 });
 
 /// Resolves an export from the real `dinput8.dll` by name.
-fn get_proc(name: PCSTR) -> unsafe extern "system" fn() -> isize {
-    unsafe { GetProcAddress(MODULE.0, name) }.expect("failed to resolve dinput8.dll export")
+fn get_proc(name: &CStr) -> unsafe extern "system" fn() -> isize {
+    unsafe { GetProcAddress(MODULE.0, name.as_ptr().cast()) }
+        .expect("failed to resolve dinput8.dll export")
 }
 
 // SAFETY: The real `dinput8.dll` exports this function with the signature defined by `F`.
@@ -52,7 +52,7 @@ extern "system" fn DirectInput8Create(
     ) -> i32;
 
     unsafe {
-        let f: F = transmute(get_proc(s!("DirectInput8Create")));
+        let f: F = transmute(get_proc(c"DirectInput8Create"));
         f(hinst, version, riid, out, outer)
     }
 }
@@ -61,7 +61,7 @@ extern "system" fn DirectInput8Create(
 extern "system" fn DllCanUnloadNow() -> i32 {
     type F = unsafe extern "system" fn() -> i32;
     unsafe {
-        let f: F = transmute(get_proc(s!("DllCanUnloadNow")));
+        let f: F = transmute(get_proc(c"DllCanUnloadNow"));
         f()
     }
 }
@@ -74,7 +74,7 @@ extern "system" fn DllGetClassObject(
 ) -> i32 {
     type F = unsafe extern "system" fn(*const c_void, *const c_void, *mut *mut c_void) -> i32;
     unsafe {
-        let f: F = transmute(get_proc(s!("DllGetClassObject")));
+        let f: F = transmute(get_proc(c"DllGetClassObject"));
         f(rclsid, riid, ppv)
     }
 }
@@ -83,7 +83,7 @@ extern "system" fn DllGetClassObject(
 extern "system" fn DllRegisterServer() -> i32 {
     type F = unsafe extern "system" fn() -> i32;
     unsafe {
-        let f: F = transmute(get_proc(s!("DllRegisterServer")));
+        let f: F = transmute(get_proc(c"DllRegisterServer"));
         f()
     }
 }
@@ -92,7 +92,7 @@ extern "system" fn DllRegisterServer() -> i32 {
 extern "system" fn DllUnregisterServer() -> i32 {
     type F = unsafe extern "system" fn() -> i32;
     unsafe {
-        let f: F = transmute(get_proc(s!("DllUnregisterServer")));
+        let f: F = transmute(get_proc(c"DllUnregisterServer"));
         f()
     }
 }
