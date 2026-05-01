@@ -10,11 +10,13 @@ use std::sync::{
     OnceLock,
     atomic::{AtomicU32, Ordering},
 };
+use windows::Win32::System::Diagnostics::Debug::FlushInstructionCache;
 use windows::Win32::System::LibraryLoader::GetModuleHandleA;
 use windows::Win32::System::Memory::{
     PAGE_EXECUTE_READWRITE, PAGE_PROTECTION_FLAGS, VirtualProtect,
 };
 use windows::Win32::System::SystemServices::DLL_PROCESS_ATTACH;
+use windows::Win32::System::Threading::GetCurrentProcess;
 use windows::core::BOOL;
 
 type GetJoypadInputFn = extern "stdcall" fn(InputFlags) -> InputFlags;
@@ -137,5 +139,6 @@ unsafe fn patch_bytes(dst: *mut u8, src: &[u8]) {
         copy_nonoverlapping(src.as_ptr(), dst, src.len());
 
         VirtualProtect(dst.cast(), src.len(), old_protect, &raw mut temp).unwrap();
+        FlushInstructionCache(GetCurrentProcess(), Some(dst.cast()), src.len()).unwrap();
     }
 }
