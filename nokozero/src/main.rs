@@ -2,9 +2,10 @@ use anyhow::{Context, Error, Result, bail};
 use pico_args::Arguments;
 use std::env::home_dir;
 use std::fs::{create_dir_all, write};
-use std::io::ErrorKind;
+use std::io::{ErrorKind, Result as IoResult};
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, exit};
+use std::process::{Child, Command, ExitStatus, Stdio, exit};
 use std::thread::sleep;
 use std::time::Duration;
 
@@ -26,6 +27,9 @@ fn main() -> Result<()> {
 
     let game_dir: PathBuf = args.value_from_str(["-d", "--game-dir"])?;
     let num_instances: Option<usize> = args.opt_value_from_str(["-n", "--instances"])?;
+    let num_instances: Option<NonZeroUsize> = num_instances
+        .map(|n| NonZeroUsize::new(n).context("`-n`/`--instances`: must be at least 1"))
+        .transpose()?;
 
     if !game_dir.is_dir() {
         bail!("`-d`/`--game-dir`: path does not point to a directory");
@@ -35,9 +39,6 @@ fn main() -> Result<()> {
             "game executable not found; no file exists at {}",
             game_dir.join("th15.exe").display()
         );
-    }
-    if num_instances == Some(0) {
-        bail!("`-n`/`--instances`: must be at least 1");
     }
 
     // Deploy the hook library as a `dinput8.dll` proxy in the game directory.
@@ -79,13 +80,13 @@ fn main() -> Result<()> {
     })
     .context("failed to set Ctrl+C handler")?;
 
-    let count = num_instances.unwrap_or(1);
-    let mut children = Vec::with_capacity(count);
+    let count = num_instances.map_or(1, NonZeroUsize::get);
+    let mut children: Vec<(usize, ChildGuard)> = Vec::with_capacity(count);
     for i in 0..count {
         let prefix = prefix_dir.as_ref().map(|dir| dir.join(i.to_string()));
         let child = spawn_game(&exe, &game_dir, prefix.as_deref())
             .with_context(|| format!("failed to start instance {i}"))?;
-        children.push((i, child));
+        children.push((i, ChildGuard(child)));
     }
 
     // Wait for all instances to exit
@@ -135,4 +136,25 @@ fn spawn_game(exe: &Path, game_dir: &Path, wine_prefix: Option<&Path>) -> Result
             err
         }
     })
+}
+
+/// Owns a spawned [`Child`] process, terminating and reaping it on drop.
+///
+/// This prevents leaking Wine instances when one of several spawns fails partway through.
+#[derive(Debug)]
+struct ChildGuard(Child);
+
+impl ChildGuard {
+    fn try_wait(&mut self) -> IoResult<Option<ExitStatus>> {
+        self.0.try_wait()
+    }
+}
+
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        // Both calls are no-ops once the child has been reaped via `try_wait()`.
+        // `Child` tracks the reaped state to avoid PID recycling.
+        self.0.kill().ok();
+        self.0.wait().ok();
+    }
 }
