@@ -202,7 +202,7 @@ impl GamePtr {
     /// Reconstitutes a `GamePtr` from a raw exposed-provenance address.
     /// Returns `None` if the address is null.
     fn from_addr(addr: usize) -> Option<Self> {
-        NonNull::new(with_exposed_provenance_mut::<u8>(addr)).map(Self)
+        NonNull::new(with_exposed_provenance_mut(addr)).map(Self)
     }
 
     /// Calculates the offset from `self` in bytes.
@@ -218,7 +218,7 @@ impl GamePtr {
     /// # Safety
     /// `self + offset` must point to a valid, initialized `T`.
     unsafe fn read<T>(self, offset: usize) -> T {
-        unsafe { self.0.byte_add(offset).cast::<T>().read_unaligned() }
+        unsafe { self.0.byte_add(offset).cast().read_unaligned() }
     }
 
     /// Reads a 32-bit game pointer at the given byte offset from `self` and reconstitutes it.
