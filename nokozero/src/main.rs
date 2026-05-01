@@ -41,7 +41,7 @@ fn main() -> Result<()> {
         );
     }
 
-    // Deploy the hook library as a `dinput8.dll` proxy in the game directory.
+    // Deploy the hook DLL as a `dinput8.dll` proxy in the game directory.
     // Windows DLL search order makes it load before the real system DLL, so we can do hooking.
     write(game_dir.join("dinput8.dll"), HOOK_DLL).context("failed to deploy hook library")?;
 
@@ -117,11 +117,22 @@ fn spawn_game(exe: &Path, game_dir: &Path, wine_prefix: Option<&Path>) -> Result
     let mut cmd = Command::new("wine");
     cmd.arg(exe)
         .current_dir(game_dir)
-        .env("WINEDLLOVERRIDES", "dinput8=n,b") // Load hook library, then fall back to the built-in real DLL
-        .env("LC_ALL", "ja_JP.UTF-8") // Run with locale set to Japanese
-        .env("WINEDEBUG", "-all") // Disable Wine's debug logging
-        .env("WINEESYNC", "1") // Enable esync optimization
-        .env("STAGING_SHARED_MEMORY", "1"); // Use shared memory to optimize wineserver calls
+        // Load hook DLL, then fall back to the built-in real DLL
+        // Disable Mono and Gecko prompts
+        .env("WINEDLLOVERRIDES", "dinput8=n,b;mscoree=d;mshtml=d")
+        .env("LC_ALL", "ja_JP.UTF-8")
+        .env("WINEDEBUG", "-all") // Disable debug logging
+        .env("WINEFSYNC", "1") // Enable futex2-based sync; faster than esync
+        .env("WINE_LARGE_ADDRESS_AWARE", "1")
+        // Enable threaded GL command submission
+        .env("mesa_glthread", "true")
+        .env("__GL_THREADED_OPTIMIZATIONS", "1")
+        // Disable vsync
+        .env("vblank_mode", "0")
+        .env("__GL_SYNC_TO_VBLANK", "0")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
 
     if let Some(prefix) = wine_prefix {
         cmd.env("WINEPREFIX", prefix);
