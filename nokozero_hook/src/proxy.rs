@@ -8,6 +8,7 @@ use std::sync::LazyLock;
 use windows_sys::Win32::Foundation::{HMODULE, MAX_PATH};
 use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryA};
 use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryA;
+use windows_sys::core::HRESULT;
 
 struct ModuleHandle(HMODULE);
 
@@ -42,14 +43,14 @@ extern "system" fn DirectInput8Create(
     riid: *const c_void,
     out: *mut *mut c_void,
     outer: *mut c_void,
-) -> i32 {
+) -> HRESULT {
     type F = unsafe extern "system" fn(
         *mut c_void,
         u32,
         *const c_void,
         *mut *mut c_void,
         *mut c_void,
-    ) -> i32;
+    ) -> HRESULT;
 
     unsafe {
         let f: F = transmute(get_proc(c"DirectInput8Create"));
@@ -58,8 +59,8 @@ extern "system" fn DirectInput8Create(
 }
 
 #[unsafe(no_mangle)]
-extern "system" fn DllCanUnloadNow() -> i32 {
-    type F = unsafe extern "system" fn() -> i32;
+extern "system" fn DllCanUnloadNow() -> HRESULT {
+    type F = unsafe extern "system" fn() -> HRESULT;
     unsafe {
         let f: F = transmute(get_proc(c"DllCanUnloadNow"));
         f()
@@ -71,8 +72,8 @@ extern "system" fn DllGetClassObject(
     rclsid: *const c_void,
     riid: *const c_void,
     ppv: *mut *mut c_void,
-) -> i32 {
-    type F = unsafe extern "system" fn(*const c_void, *const c_void, *mut *mut c_void) -> i32;
+) -> HRESULT {
+    type F = unsafe extern "system" fn(*const c_void, *const c_void, *mut *mut c_void) -> HRESULT;
     unsafe {
         let f: F = transmute(get_proc(c"DllGetClassObject"));
         f(rclsid, riid, ppv)
@@ -80,8 +81,8 @@ extern "system" fn DllGetClassObject(
 }
 
 #[unsafe(no_mangle)]
-extern "system" fn DllRegisterServer() -> i32 {
-    type F = unsafe extern "system" fn() -> i32;
+extern "system" fn DllRegisterServer() -> HRESULT {
+    type F = unsafe extern "system" fn() -> HRESULT;
     unsafe {
         let f: F = transmute(get_proc(c"DllRegisterServer"));
         f()
@@ -89,8 +90,8 @@ extern "system" fn DllRegisterServer() -> i32 {
 }
 
 #[unsafe(no_mangle)]
-extern "system" fn DllUnregisterServer() -> i32 {
-    type F = unsafe extern "system" fn() -> i32;
+extern "system" fn DllUnregisterServer() -> HRESULT {
+    type F = unsafe extern "system" fn() -> HRESULT;
     unsafe {
         let f: F = transmute(get_proc(c"DllUnregisterServer"));
         f()
