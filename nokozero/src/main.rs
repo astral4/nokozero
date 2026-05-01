@@ -1,6 +1,6 @@
 use anyhow::{Context, Error, Result, bail};
 use pico_args::Arguments;
-use std::env::var;
+use std::env::home_dir;
 use std::fs::{create_dir_all, write};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -54,8 +54,9 @@ fn main() -> Result<()> {
 
     // When `-n` is specified, each instance gets its own Wine prefix for process isolation
     let prefix_dir = if num_instances.is_some() {
-        let home = var("HOME").context("HOME environment variable not set")?;
-        let dir = PathBuf::from(home).join(".local/share/nokozero/prefixes");
+        let dir = home_dir()
+            .context("could not determine home directory")?
+            .join(".local/share/nokozero/prefixes");
         create_dir_all(&dir).context("failed to create prefix directory")?;
         Some(dir)
     } else {
