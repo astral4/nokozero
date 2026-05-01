@@ -5,7 +5,7 @@ use bitflags::bitflags;
 use reader::StateReader;
 use std::ffi::c_void;
 use std::mem::transmute;
-use std::ptr::copy_nonoverlapping;
+use std::ptr::{NonNull, copy_nonoverlapping};
 use std::sync::{
     OnceLock,
     atomic::{AtomicU32, Ordering},
@@ -53,7 +53,9 @@ bitflags! {
 }
 
 extern "stdcall" fn get_joypad_input_hook(base: InputFlags) -> InputFlags {
-    let reader = READER.get().expect("reader should be initialized");
+    // SAFETY: `READER` is set in `DllMain` before `patch_call()` installs this hook,
+    // so it is initialized by the time this code is reached.
+    let reader = unsafe { READER.get().unwrap_unchecked() };
 
     if reader.is_game_active() {
         static FRAME_COUNT: AtomicU32 = AtomicU32::new(0);
@@ -82,17 +84,17 @@ extern "system" fn DllMain(_h_module: *mut c_void, reason: u32, _reserved: *mut 
         // so no thread can be executing them yet. This guarantees that the reader,
         // original function pointer, and code patch are all in place before any hooked code runs.
         let module = unsafe { GetModuleHandleA(None) }.expect("game module handle should be valid");
-        let base = module.0.cast::<u8>();
+        // SAFETY: `GetModuleHandleA` returns `Ok` only with a non-null handle.
+        let base = unsafe { NonNull::new_unchecked(module.0.cast::<u8>()) };
 
         // SAFETY: `base` points to the start of the game's PE image,
         // which is loaded for the lifetime of the process.
-        READER
-            .set(unsafe { StateReader::new(base.cast_const()) })
-            .unwrap();
+        READER.set(unsafe { StateReader::new(base) }).unwrap();
 
         // SAFETY: `GET_JOYPAD_INPUT_ADDR` is the offset of the original function.
         // Its signature matches the definition of `GetJoypadInputFn`.
-        let original_fn: GetJoypadInputFn = unsafe { transmute(base.add(GET_JOYPAD_INPUT_ADDR)) };
+        let original_fn: GetJoypadInputFn =
+            unsafe { transmute(base.byte_add(GET_JOYPAD_INPUT_ADDR).as_ptr()) };
         GET_JOYPAD_INPUT_ORIGINAL.set(original_fn).unwrap();
 
         // We use the address of `get_joypad_input_hook` to calculate
@@ -101,7 +103,8 @@ extern "system" fn DllMain(_h_module: *mut c_void, reason: u32, _reserved: *mut 
         // via `get_joypad_input_hook as usize` or, equivalently,
         // `(get_joypad_input_hook as *const ()).expose_provenance()`.
         let hook_addr = (get_joypad_input_hook as *const ()).addr();
-        unsafe { patch_call(base.add(GET_JOYPAD_INPUT_HOOK_ADDR), hook_addr) };
+        let hook_target = unsafe { base.byte_add(GET_JOYPAD_INPUT_HOOK_ADDR).as_ptr() };
+        unsafe { patch_call(hook_target, hook_addr) };
     }
 
     BOOL(1)
