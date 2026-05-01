@@ -23,6 +23,7 @@ fn main() {
     );
 
     println!("cargo:rustc-env=HOOK_PATH={}", hook_path.display());
+    println!("cargo:rerun-if-changed={}", hook_path.display());
     println!("cargo:rerun-if-changed=../nokozero_hook/src");
     println!("cargo:rerun-if-changed=../nokozero_hook/Cargo.toml");
 }
