@@ -121,7 +121,8 @@ fn spawn_game(exe: &Path, game_dir: &Path, wine_prefix: Option<&Path>) -> Result
         // Disable Mono and Gecko prompts
         .env("WINEDLLOVERRIDES", "dinput8=n,b;mscoree=d;mshtml=d")
         .env("LC_ALL", "ja_JP.UTF-8")
-        .env("WINEDEBUG", "-all") // Disable debug logging
+        .env("WINEDEBUG", "-all") // Disable Wine debug logging
+        .env("EGL_LOG_LEVEL", "fatal") // Disable Mesa EGL logging; EGL is not needed for D3D9
         .env("WINEFSYNC", "1") // Enable futex2-based sync; faster than esync
         .env("WINE_LARGE_ADDRESS_AWARE", "1")
         // Enable threaded GL command submission
