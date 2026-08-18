@@ -71,6 +71,5 @@ just build
 Equivalently, without `just`:
 
 ```
-cargo build -p nokozero_hook --target i686-pc-windows-gnu --release
-cargo build -p nokozero --release
+cargo build --manifest-path nokozero_hook/Cargo.toml --release
 ```

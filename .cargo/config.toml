@@ -1,2 +1,11 @@
 [build]
-rustflags = ["-C", "target-cpu=native"]
+target = "i686-pc-windows-gnu"
+
+[target.i686-pc-windows-gnu]
+runner = "wine"
+rustflags = ["-Clink-arg=-Wl,--enable-stdcall-fixup"]
+
+[env]
+WINEDEBUG = "-all"
+WINEDLLOVERRIDES = "mscoree=,mshtml=,winemenubuilder.exe=d"
+EGL_LOG_LEVEL = "fatal"

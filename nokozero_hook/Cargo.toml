@@ -1,14 +1,14 @@
 [package]
 name = "nokozero_hook"
-version.workspace = true
-authors.workspace = true
-edition.workspace = true
-rust-version.workspace = true
+version = "0.0.0"
+authors = ["Kyle Chen"]
+edition = "2024"
+rust-version = "1.88"
 description = "Input hooking for nokozero"
-readme.workspace = true
-repository.workspace = true
-license.workspace = true
-publish.workspace = true
+readme = "../README.md"
+repository = "https://github.com/astral4/nokozero"
+license = "MIT OR Apache-2.0"
+publish = false
 
 [dependencies]
 bitflags = "2.11.1"
@@ -25,5 +25,40 @@ windows-sys = { version = "0.61", features = [
 [lib]
 crate-type = ["cdylib"]
 
-[lints]
-workspace = true
+[lints.rust]
+async_fn_in_trait = "allow"
+ffi_unwind_calls = "warn"
+let_underscore_drop = "deny"
+macro_use_extern_crate = "deny"
+meta_variable_misuse = "deny"
+missing_abi = "deny"
+missing_copy_implementations = "warn"
+missing_debug_implementations = "warn"
+non_ascii_idents = "forbid"
+non_local_definitions = "warn"
+nonstandard_style = { level = "deny", priority = 1 }
+redundant_lifetimes = "deny"
+rust_2018_idioms = { level = "deny", priority = 1 }
+trivial_casts = "deny"
+trivial_numeric_casts = "deny"
+unit_bindings = "deny"
+unreachable_pub = "deny"
+unused_import_braces = "deny"
+unused_lifetimes = "deny"
+unused_macro_rules = "deny"
+unused_qualifications = "deny"
+
+[lints.clippy]
+doc_markdown = { level = "allow", priority = 1 }
+module_name_repetitions = { level = "allow", priority = 1 }
+should_panic_without_expect = { level = "allow", priority = 1 }
+unreadable_literal = { level = "allow", priority = 1 }
+pedantic = "warn"
+
+[profile.release]
+lto = "thin"
+strip = true
+panic = "abort"
+
+[profile.dev]
+panic = "abort"

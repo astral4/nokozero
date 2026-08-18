@@ -1,26 +1,23 @@
+hook := "--manifest-path nokozero_hook/Cargo.toml"
+
 default: build
 
-build: build-hook build-main
+build: build-hook
 
 build-hook:
-    cargo build -p nokozero_hook --target i686-pc-windows-gnu --release
-
-build-main:
-    cargo build -p nokozero --release
-
-run *ARGS: build-hook
-    cargo run -p nokozero --release -- {{ARGS}}
+    cargo build {{hook}} --release
 
 fmt:
-    cargo fmt --all
+    cargo fmt --all {{hook}}
 
-clippy: clippy-hook clippy-main
+test-hook:
+    cargo test {{hook}}
 
 clippy-hook:
-    cargo clippy -p nokozero_hook --target i686-pc-windows-gnu --release --all-targets -- -D warnings
+    cargo clippy {{hook}} --release --all-targets -- -D warnings
 
-clippy-main:
-    cargo clippy -p nokozero --release --all-targets -- -D warnings
+lint: clippy-hook
+    cargo fmt --all {{hook}} --check
 
 clean:
-    cargo clean
+    cargo clean {{hook}}
