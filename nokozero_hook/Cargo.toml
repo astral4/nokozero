@@ -73,9 +73,10 @@ unused_trait_names = "deny"
 wildcard_enum_match_arm = "deny"
 
 [profile.release]
-lto = "thin"
-strip = true
+lto = "fat"
+codegen-units = 1
 panic = "abort"
+strip = true
 
 [profile.dev]
 panic = "abort"
