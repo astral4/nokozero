@@ -26,34 +26,51 @@ windows-sys = { version = "0.61", features = [
 crate-type = ["cdylib"]
 
 [lints.rust]
-async_fn_in_trait = "allow"
 ffi_unwind_calls = "warn"
+improper_ctypes = "deny"
+improper_ctypes_definitions = "deny"
 let_underscore_drop = "deny"
 macro_use_extern_crate = "deny"
 meta_variable_misuse = "deny"
 missing_abi = "deny"
-missing_copy_implementations = "warn"
-missing_debug_implementations = "warn"
 non_ascii_idents = "forbid"
 non_local_definitions = "warn"
-nonstandard_style = { level = "deny", priority = 1 }
+nonstandard_style = { level = "deny", priority = -1 }
 redundant_lifetimes = "deny"
-rust_2018_idioms = { level = "deny", priority = 1 }
+rust_2018_idioms = { level = "deny", priority = -1 }
 trivial_casts = "deny"
 trivial_numeric_casts = "deny"
 unit_bindings = "deny"
 unreachable_pub = "deny"
+unsafe_op_in_unsafe_fn = "deny"
+unused_crate_dependencies = "deny"
 unused_import_braces = "deny"
 unused_lifetimes = "deny"
 unused_macro_rules = "deny"
 unused_qualifications = "deny"
 
 [lints.clippy]
-doc_markdown = { level = "allow", priority = 1 }
-module_name_repetitions = { level = "allow", priority = 1 }
-should_panic_without_expect = { level = "allow", priority = 1 }
-unreadable_literal = { level = "allow", priority = 1 }
-pedantic = "warn"
+pedantic = { level = "warn", priority = -1 }
+should_panic_without_expect = "allow"
+as_ptr_cast_mut = "deny"
+big_endian_bytes = "deny"
+dbg_macro = "deny"
+doc_paragraphs_missing_punctuation = "deny"
+exit = "deny"
+fn_to_numeric_cast_any = "deny"
+host_endian_bytes = "deny"
+mem_forget = "deny"
+missing_assert_message = "deny"
+precedence_bits = "deny"
+print_stdout = "deny"
+self_named_module_files = "deny"
+todo = "deny"
+transmute_undefined_repr = "deny"
+unimplemented = "deny"
+unnecessary_safety_comment = "deny"
+unnecessary_safety_doc = "deny"
+unused_trait_names = "deny"
+wildcard_enum_match_arm = "deny"
 
 [profile.release]
 lto = "thin"
