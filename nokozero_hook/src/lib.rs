@@ -1,3 +1,10 @@
+#[cfg(not(target_arch = "x86"))]
+compile_error!("nokozero_hook targets i686-pc-windows-gnu");
+
+// See `build.rs`.
+#[cfg(needs_unwind_resume_stub)]
+std::arch::global_asm!(".globl __Unwind_Resume", "__Unwind_Resume:", "ud2");
+
 mod proxy;
 pub mod reader;
 
