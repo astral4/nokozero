@@ -1,5 +1,6 @@
 //! Constructs for main-thread identity and access.
 
+use crate::practice::Generation;
 use std::cell::Cell;
 use std::marker::PhantomData;
 use std::process::abort;
@@ -39,6 +40,33 @@ impl MainThread {
             _ => off_main_thread(tid),
         }
     }
+
+    /// Aborts if the update thread is unclaimed or the caller is not from the claimed thread.
+    pub(crate) fn current() -> Self {
+        let tid = unsafe { GetCurrentThreadId() };
+        if MAIN_TID.load(Ordering::Relaxed) != tid {
+            off_main_thread(tid);
+        }
+        Self(PhantomData)
+    }
+}
+
+/// A zero-sized proof that game code is not concurrently reading or writing memory that the holder will modify.
+#[derive(Clone, Copy)]
+pub(crate) struct MainToken(MainThread);
+
+impl MainToken {
+    /// # Safety
+    ///
+    /// Game code must not be concurrently reading or writing memory that the holder will modify.
+    pub(crate) unsafe fn new(thread: MainThread) -> Self {
+        Self(thread)
+    }
+
+    /// Returns the claimed thread associated with this instance.
+    pub(crate) fn thread(self) -> MainThread {
+        self.0
+    }
 }
 
 /// An interior-mutable cell for main-thread-only state in contexts that require `Sync`. This type should be preferred over atomic types
@@ -70,6 +98,52 @@ impl<T> MainCell<T> {
 impl<T: Copy> MainCell<T> {
     pub(crate) fn get(&self, _thread: MainThread) -> T {
         self.0.get()
+    }
+}
+
+/// A [`MainCell`] where the value belongs within a single stage load. Writes indicate the value's load [`Generation`].
+/// Reads indicate which generation is requesting the query, and mismatched-generation reads return the state of a brand-new load.
+pub(crate) struct PerLoad<T> {
+    /// The state of a brand-new load.
+    fresh: T,
+    cell: MainCell<Option<(Generation, T)>>,
+}
+
+impl<T: Copy> PerLoad<T> {
+    /// Constructs a new instance. `fresh` must be the state of a brand-new load.
+    pub(crate) const fn new(fresh: T) -> Self {
+        Self {
+            fresh,
+            cell: MainCell::new(None),
+        }
+    }
+
+    /// Returns the value if it was stored under `generation`. Otherwise, returns the fresh value.
+    pub(crate) fn get(&self, thread: MainThread, generation: Generation) -> T {
+        match self.cell.get(thread) {
+            Some((stamp, value)) if stamp == generation => value,
+            _ => self.fresh,
+        }
+    }
+
+    /// Stores `value` as belonging to `generation`.
+    pub(crate) fn set(&self, thread: MainThread, generation: Generation, value: T) {
+        self.cell.set(thread, Some((generation, value)));
+    }
+
+    /// Runs `f` on the current value if it belongs to `generation`. Otherwise, runs `f` on the fresh value.
+    /// If `f` returns `Some(_)`, then modifications to `f`'s input are stored back as the new cell value.
+    /// If `f` returns `None`, then any modifications are discarded and the cell value is left untouched.
+    pub(crate) fn update<R>(
+        &self,
+        thread: MainThread,
+        generation: Generation,
+        f: impl FnOnce(&mut T) -> Option<R>,
+    ) -> Option<R> {
+        let mut value = self.get(thread, generation);
+        let r = f(&mut value)?;
+        self.set(thread, generation, value);
+        Some(r)
     }
 }
 
@@ -109,7 +183,7 @@ mod test_support {
 #[cfg(test)]
 mod tests {
     use super::test_support::MainClaim;
-    use super::{MainCell, MainThread};
+    use super::{Generation, MainCell, MainThread, PerLoad};
 
     #[test]
     fn thread_claim_idempotency() {
@@ -119,9 +193,56 @@ mod tests {
 
         let thread = MainThread::claim();
         let _confirmed = MainThread::claim();
+        let _current = MainThread::current();
 
         assert_eq!(CELL.get(thread), 1);
         CELL.set(thread, 5);
-        assert_eq!(CELL.get(thread), 5);
+        assert_eq!(CELL.replace(thread, 7), 5);
+        assert_eq!(CELL.get(thread), 7);
+    }
+
+    #[test]
+    fn per_load_values_scoped_to_generation() {
+        static VALUE: PerLoad<u32> = PerLoad::new(42);
+
+        let _claim = MainClaim::acquire();
+
+        let thread = MainThread::claim();
+        let (g0, g1, g2, g3) = (
+            Generation::for_test(0),
+            Generation::for_test(1),
+            Generation::for_test(2),
+            Generation::for_test(3),
+        );
+
+        // Before any write has occurred, no generation matches, so the fresh value is read.
+        assert_eq!(VALUE.get(thread, g0), 42);
+
+        VALUE.set(thread, g1, 7);
+        assert_eq!(VALUE.get(thread, g1), 7);
+        assert_eq!(VALUE.get(thread, g2), 42);
+        assert_eq!(VALUE.get(thread, g1), 7);
+
+        let x = VALUE.update(thread, g1, |v| {
+            *v *= 2;
+            Some(*v)
+        });
+        assert_eq!(x, Some(14));
+        assert_eq!(VALUE.get(thread, g1), 14);
+
+        let x = VALUE.update(thread, g1, |v| {
+            *v = 99;
+            None::<()>
+        });
+        assert_eq!(x, None);
+        assert_eq!(VALUE.get(thread, g1), 14);
+
+        let x = VALUE.update(thread, g3, |v| {
+            *v += 5;
+            Some(*v)
+        });
+        assert_eq!(x, Some(47));
+        assert_eq!(VALUE.get(thread, g3), 47);
+        assert_eq!(VALUE.get(thread, g1), 42);
     }
 }

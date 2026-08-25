@@ -9,12 +9,14 @@ mod addrs;
 mod dinput8;
 mod mem;
 mod patch;
+mod practice;
 mod reader;
 mod thread;
 
 use crate::patch::{CallSite, NearBranchSite};
+use crate::practice::{apply_pending_reset, observe_loads};
 use crate::reader::GameState;
-use crate::thread::{MainCell, MainThread};
+use crate::thread::{MainCell, MainThread, MainToken};
 use bitflags::bitflags;
 use std::ffi::c_void;
 use windows_sys::Win32::Foundation::{HINSTANCE, HMODULE};
@@ -54,6 +56,10 @@ bitflags! {
 
 extern "system" fn get_joypad_input_hook(base: InputFlags) -> InputFlags {
     let thread = MainThread::claim();
+    // SAFETY: This hook is called from the game's update loop, so its thread is the update thread.
+    let token = unsafe { MainToken::new(thread) };
+
+    observe_loads(thread);
 
     let frame = FRAME_COUNT.get(thread);
     FRAME_COUNT.set(thread, frame.wrapping_add(1));
@@ -67,6 +73,8 @@ extern "system" fn get_joypad_input_hook(base: InputFlags) -> InputFlags {
         }
         GAME_STATE.set(thread, Some(state));
     }
+
+    apply_pending_reset(token);
 
     // TODO: send inputs
     base
@@ -97,5 +105,7 @@ unsafe fn install() {
 
         CallSite::new(0x0040_22fa, 0x0040_1b20, "GetJoypadInput call detour")
             .retarget(get_joypad_input_hook as *mut ());
+
+        practice::install();
     }
 }

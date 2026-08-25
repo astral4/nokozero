@@ -46,6 +46,12 @@ impl Display for Hex<'_> {
     }
 }
 
+/// Returns the bytes of a one-byte opcode with an abs32 operand.
+pub(crate) const fn op_abs32(opcode: u8, addr: u32) -> [u8; 5] {
+    let a = addr.to_le_bytes();
+    [opcode, a[0], a[1], a[2], a[3]]
+}
+
 /// Returns the little-endian disp32 of a branch whose next instruction starts at `next`, targeting `target`.
 const fn disp32(next: u32, target: u32) -> [u8; 4] {
     target.wrapping_sub(next).to_le_bytes()
@@ -77,12 +83,31 @@ impl<const N: usize> Site<N> {
         }
     }
 
+    /// Returns the address just past the expected bytes.
+    #[expect(clippy::cast_possible_truncation)]
+    #[must_use]
+    pub(crate) const fn after(&self) -> u32 {
+        self.addr + N as u32
+    }
+
     /// Constructs a [`Patch`] replacing the site's bytes with `replacement`.
     pub(crate) const fn patch(self, replacement: [u8; N]) -> Patch<N> {
         Patch {
             site: self,
             replacement,
         }
+    }
+
+    /// Writes an `e9 disp32` jmp over the site to `hook`.
+    /// The expected bytes are the full displaced-instruction sequence (at least 5 bytes). Bytes past offset 4 are NOP-padded.
+    ///
+    /// # Safety
+    ///
+    /// The site must be mapped, and no other thread may execute or write its page for the duration.
+    /// In practice, this means this function should be called during `DLL_PROCESS_ATTACH`.
+    /// `hook` must be sound to enter with the register and stack state at the site, in place of the displaced instructions.
+    pub(crate) unsafe fn jmp(&self, hook: *mut ()) {
+        unsafe { self.write_relative_branch(hook, 0xe9) };
     }
 
     unsafe fn write_relative_branch(&self, hook: *mut (), opcode: u8) {
@@ -165,6 +190,11 @@ impl NearBranchSite {
     pub(crate) const fn force(self) -> Patch<NEAR_LEN> {
         let e = self.site.expected;
         self.site.patch([0x90, 0xe9, e[2], e[3], e[4], e[5]])
+    }
+
+    /// Constructs a [`Patch`] forcing the branch to never be taken.
+    pub(crate) const fn skip(self) -> Patch<NEAR_LEN> {
+        self.site.patch([0x90; _])
     }
 }
 
