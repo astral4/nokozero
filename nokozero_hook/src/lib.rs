@@ -6,33 +6,24 @@ compile_error!("nokozero_hook targets i686-pc-windows-gnu");
 std::arch::global_asm!(".globl __Unwind_Resume", "__Unwind_Resume:", "ud2");
 
 mod dinput8;
+mod patch;
 pub mod reader;
 
+use crate::patch::{CallSite, NearBranchSite};
 use bitflags::bitflags;
 use reader::StateReader;
 use std::ffi::c_void;
-use std::mem::transmute;
-use std::ptr::{NonNull, copy_nonoverlapping, null};
-use std::sync::{
-    OnceLock,
-    atomic::{AtomicU32, Ordering},
-};
-use windows_sys::Win32::System::Diagnostics::Debug::FlushInstructionCache;
-use windows_sys::Win32::System::LibraryLoader::GetModuleHandleA;
-use windows_sys::Win32::System::Memory::{PAGE_EXECUTE_READWRITE, VirtualProtect};
+use std::ptr::{NonNull, null};
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU32, Ordering};
+use windows_sys::Win32::Foundation::{HINSTANCE, HMODULE};
+use windows_sys::Win32::System::LibraryLoader::{DisableThreadLibraryCalls, GetModuleHandleA};
 use windows_sys::Win32::System::SystemServices::DLL_PROCESS_ATTACH;
-use windows_sys::Win32::System::Threading::GetCurrentProcess;
 use windows_sys::core::BOOL;
-
-type GetJoypadInputFn = extern "system" fn(InputFlags) -> InputFlags;
-
-const GET_JOYPAD_INPUT_ADDR: usize = 0x1b20;
-const GET_JOYPAD_INPUT_HOOK_ADDR: usize = 0x22fa;
 
 /// The number of frames between each game state read.
 const READ_INTERVAL: u32 = 6;
 
-static GET_JOYPAD_INPUT_ORIGINAL: OnceLock<GetJoypadInputFn> = OnceLock::new();
 static READER: OnceLock<StateReader> = OnceLock::new();
 
 bitflags! {
@@ -59,7 +50,7 @@ bitflags! {
 }
 
 extern "system" fn get_joypad_input_hook(base: InputFlags) -> InputFlags {
-    // SAFETY: `READER` is set in `DllMain` before `patch_call()` installs this hook,
+    // SAFETY: `READER` is set in `DllMain` before `install` retargets the call to this hook,
     // so it is initialized by the time this code is reached.
     let reader = unsafe { READER.get().unwrap_unchecked() };
 
@@ -75,20 +66,16 @@ extern "system" fn get_joypad_input_hook(base: InputFlags) -> InputFlags {
 
         // TODO: send inputs
         InputFlags::SHOOT | base
-    } else if let Some(original) = GET_JOYPAD_INPUT_ORIGINAL.get() {
-        original(base)
     } else {
         base
     }
 }
 
 #[unsafe(no_mangle)]
-extern "system" fn DllMain(_h_module: *mut c_void, reason: u32, _reserved: *mut c_void) -> BOOL {
+extern "system" fn DllMain(h_module: HINSTANCE, reason: u32, _reserved: *mut c_void) -> BOOL {
     if reason == DLL_PROCESS_ATTACH {
-        // `DLL_PROCESS_ATTACH` runs during process initialization, before the game's entry point.
-        // The functions we hook are only reachable from the game's main loop,
-        // so no thread can be executing them yet. This guarantees that the reader,
-        // original function pointer, and code patch are all in place before any hooked code runs.
+        unsafe { DisableThreadLibraryCalls(h_module as HMODULE) };
+
         let module = unsafe { GetModuleHandleA(null()) };
         let base = NonNull::new(module.cast()).expect("game module handle should be valid");
 
@@ -96,65 +83,25 @@ extern "system" fn DllMain(_h_module: *mut c_void, reason: u32, _reserved: *mut 
         // which is loaded for the lifetime of the process.
         READER.set(unsafe { StateReader::new(base) }).unwrap();
 
-        // SAFETY: `GET_JOYPAD_INPUT_ADDR` is the offset of the original function.
-        // Its signature matches the definition of `GetJoypadInputFn`.
-        let original_fn: GetJoypadInputFn =
-            unsafe { transmute(base.byte_add(GET_JOYPAD_INPUT_ADDR).as_ptr()) };
-        GET_JOYPAD_INPUT_ORIGINAL.set(original_fn).unwrap();
-
-        // We use the address of `get_joypad_input_hook` to calculate
-        // the relative offset for an x86 CALL instruction.
-        // Since we won't reconstruct a pointer from this address, we don't expose provenance
-        // via `get_joypad_input_hook as usize` or, equivalently,
-        // `(get_joypad_input_hook as *const ()).expose_provenance()`.
-        let hook_addr = (get_joypad_input_hook as *const ()).addr();
-        let hook_target = unsafe { base.byte_add(GET_JOYPAD_INPUT_HOOK_ADDR).as_ptr() };
-        unsafe { patch_call(hook_target, hook_addr) };
+        unsafe { install() };
     }
 
     1
 }
 
 /// # Safety
-/// `target` must point to a 5-byte CALL instruction that no other thread is executing.
-unsafe fn patch_call(target: *mut u8, func: usize) {
-    let mut patch = [0u8; 5];
-    patch[0] = 0xE8; // CALL opcode
-
-    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-    let offset = func.wrapping_sub(target.addr()).wrapping_sub(5) as i32;
-    patch[1..5].copy_from_slice(&offset.to_le_bytes());
-
-    unsafe { patch_bytes(target, &patch) };
-}
-
-/// # Safety
-/// `dst` must be valid for writes of `src.len()` bytes,
-/// and no other thread may be executing the code at `dst`.
-unsafe fn patch_bytes(dst: *mut u8, src: &[u8]) {
-    let mut old_protect = 0;
-    let mut temp = 0;
-
+///
+/// The game image must be loaded at its fixed base. This function must be called during `DLL_PROCESS_ATTACH`,
+/// before the game's entry point runs.
+unsafe fn install() {
     unsafe {
-        assert_ne!(
-            VirtualProtect(
-                dst.cast(),
-                src.len(),
-                PAGE_EXECUTE_READWRITE,
-                &raw mut old_protect,
-            ),
-            0,
-        );
+        // Lets multiple game instances run in parallel.
+        const {
+            NearBranchSite::new(0x0047_13ec, 0x85, 0x0047_15a9, "instance mutex disable").force()
+        }
+        .apply();
 
-        copy_nonoverlapping(src.as_ptr(), dst, src.len());
-
-        assert_ne!(
-            VirtualProtect(dst.cast(), src.len(), old_protect, &raw mut temp),
-            0
-        );
-        assert_ne!(
-            FlushInstructionCache(GetCurrentProcess(), dst.cast(), src.len()),
-            0,
-        );
+        CallSite::new(0x0040_22fa, 0x0040_1b20, "GetJoypadInput call detour")
+            .retarget(get_joypad_input_hook as *mut ());
     }
 }
