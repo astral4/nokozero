@@ -5,29 +5,29 @@ compile_error!("nokozero_hook targets i686-pc-windows-gnu");
 #[cfg(needs_unwind_resume_stub)]
 std::arch::global_asm!(".globl __Unwind_Resume", "__Unwind_Resume:", "ud2");
 
+mod addrs;
 mod dinput8;
+mod mem;
 mod patch;
+mod reader;
 mod thread;
-pub mod reader;
 
 use crate::patch::{CallSite, NearBranchSite};
+use crate::reader::GameState;
 use crate::thread::{MainCell, MainThread};
 use bitflags::bitflags;
-use reader::StateReader;
 use std::ffi::c_void;
-use std::ptr::{NonNull, null};
-use std::sync::OnceLock;
 use windows_sys::Win32::Foundation::{HINSTANCE, HMODULE};
-use windows_sys::Win32::System::LibraryLoader::{DisableThreadLibraryCalls, GetModuleHandleA};
+use windows_sys::Win32::System::LibraryLoader::DisableThreadLibraryCalls;
 use windows_sys::Win32::System::SystemServices::DLL_PROCESS_ATTACH;
 use windows_sys::core::BOOL;
 
 /// The number of frames between each game state read.
 const READ_INTERVAL: u32 = 6;
 
-static READER: OnceLock<StateReader> = OnceLock::new();
-
 static FRAME_COUNT: MainCell<u32> = MainCell::new(0);
+
+static GAME_STATE: MainCell<Option<GameState>> = MainCell::new(None);
 
 bitflags! {
     #[repr(transparent)]
@@ -55,38 +55,27 @@ bitflags! {
 extern "system" fn get_joypad_input_hook(base: InputFlags) -> InputFlags {
     let thread = MainThread::claim();
 
-    // SAFETY: `READER` is set in `DllMain` before `install` retargets the call to this hook,
-    // so it is initialized by the time this code is reached.
-    let reader = unsafe { READER.get().unwrap_unchecked() };
+    let frame = FRAME_COUNT.get(thread);
+    FRAME_COUNT.set(thread, frame.wrapping_add(1));
 
-    if reader.is_game_active() {
-        let frame = FRAME_COUNT.get(thread);
-        FRAME_COUNT.set(thread, frame.wrapping_add(1));
-
-        if frame % READ_INTERVAL == 0 {
-            if let Some(_state) = reader.get_state() {
-                // TODO: send game state
-            }
+    if frame.is_multiple_of(READ_INTERVAL) {
+        let mut state = GAME_STATE
+            .replace(thread, None)
+            .unwrap_or_else(GameState::new);
+        if let Some(_state) = state.read() {
+            // TODO: send the observation
         }
-
-        // TODO: send inputs
-        InputFlags::SHOOT | base
-    } else {
-        base
+        GAME_STATE.set(thread, Some(state));
     }
+
+    // TODO: send inputs
+    base
 }
 
 #[unsafe(no_mangle)]
 extern "system" fn DllMain(h_module: HINSTANCE, reason: u32, _reserved: *mut c_void) -> BOOL {
     if reason == DLL_PROCESS_ATTACH {
         unsafe { DisableThreadLibraryCalls(h_module as HMODULE) };
-
-        let module = unsafe { GetModuleHandleA(null()) };
-        let base = NonNull::new(module.cast()).expect("game module handle should be valid");
-
-        // SAFETY: `base` points to the start of the game's PE image,
-        // which is loaded for the lifetime of the process.
-        READER.set(unsafe { StateReader::new(base) }).unwrap();
 
         unsafe { install() };
     }

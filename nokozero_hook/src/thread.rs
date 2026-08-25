@@ -59,6 +59,12 @@ impl<T> MainCell<T> {
     pub(crate) fn set(&self, _thread: MainThread, value: T) {
         self.0.set(value);
     }
+
+    /// Swaps in `value` and returns the previous contents.
+    #[must_use]
+    pub(crate) fn replace(&self, _thread: MainThread, value: T) -> T {
+        self.0.replace(value)
+    }
 }
 
 impl<T: Copy> MainCell<T> {
