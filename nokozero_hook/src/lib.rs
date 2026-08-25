@@ -7,15 +7,16 @@ std::arch::global_asm!(".globl __Unwind_Resume", "__Unwind_Resume:", "ud2");
 
 mod dinput8;
 mod patch;
+mod thread;
 pub mod reader;
 
 use crate::patch::{CallSite, NearBranchSite};
+use crate::thread::{MainCell, MainThread};
 use bitflags::bitflags;
 use reader::StateReader;
 use std::ffi::c_void;
 use std::ptr::{NonNull, null};
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicU32, Ordering};
 use windows_sys::Win32::Foundation::{HINSTANCE, HMODULE};
 use windows_sys::Win32::System::LibraryLoader::{DisableThreadLibraryCalls, GetModuleHandleA};
 use windows_sys::Win32::System::SystemServices::DLL_PROCESS_ATTACH;
@@ -25,6 +26,8 @@ use windows_sys::core::BOOL;
 const READ_INTERVAL: u32 = 6;
 
 static READER: OnceLock<StateReader> = OnceLock::new();
+
+static FRAME_COUNT: MainCell<u32> = MainCell::new(0);
 
 bitflags! {
     #[repr(transparent)]
@@ -50,13 +53,15 @@ bitflags! {
 }
 
 extern "system" fn get_joypad_input_hook(base: InputFlags) -> InputFlags {
+    let thread = MainThread::claim();
+
     // SAFETY: `READER` is set in `DllMain` before `install` retargets the call to this hook,
     // so it is initialized by the time this code is reached.
     let reader = unsafe { READER.get().unwrap_unchecked() };
 
     if reader.is_game_active() {
-        static FRAME_COUNT: AtomicU32 = AtomicU32::new(0);
-        let frame = FRAME_COUNT.fetch_add(1, Ordering::Relaxed);
+        let frame = FRAME_COUNT.get(thread);
+        FRAME_COUNT.set(thread, frame.wrapping_add(1));
 
         if frame % READ_INTERVAL == 0 {
             if let Some(_state) = reader.get_state() {
