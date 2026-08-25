@@ -30,6 +30,7 @@ pub(crate) const GAMEMODE_VA: usize = 0x004e_7ec8;
 pub(crate) const GAMEMODE_TO_SWITCH_TO_VA: usize = 0x004e_7ecc;
 
 /// Scene IDs held by [`GAMEMODE_VA`] and [`GAMEMODE_TO_SWITCH_TO_VA`].
+pub(crate) const GAMEMODE_MENU: u32 = 4;
 pub(crate) const GAMEMODE_INGAME: u32 = 7;
 pub(crate) const GAMEMODE_RETRY: u32 = 10;
 
@@ -45,3 +46,4 @@ pub(crate) const GAME_THREAD_PTR_VA: usize = 0x004e_9a94;
 pub(crate) const ITEM_MANAGER_PTR_VA: usize = 0x004e_9a9c;
 pub(crate) const LASER_MANAGER_PTR_VA: usize = 0x004e_9ba0;
 pub(crate) const PLAYER_PTR_VA: usize = 0x004e_9bb8;
+pub(crate) const MAIN_MENU_PTR_VA: usize = 0x004e_9be0;

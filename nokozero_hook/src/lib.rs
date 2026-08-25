@@ -14,16 +14,18 @@ mod hit;
 mod iat;
 mod ipc;
 mod mem;
+mod menu;
 mod patch;
 mod practice;
 mod reader;
 mod thread;
 
-use crate::addrs::{GAMEMODE_INGAME, GAMEMODE_VA, GUI_PTR_VA};
+use crate::addrs::{GAMEMODE_INGAME, GAMEMODE_MENU, GAMEMODE_VA, GUI_PTR_VA};
 use crate::features::{Meta, Scene, build as build_features};
 use crate::hit::take_forced_step;
 use crate::ipc::{Command, ObsFrame, is_connected, step};
 use crate::mem::{game_live, read, read_ptr};
+use crate::menu::navigate;
 use crate::patch::{CallSite, NearBranchSite};
 use crate::practice::{WireMeta, accept_reset, apply_pending_reset, observe_loads};
 use crate::reader::{GameState, Resources};
@@ -128,10 +130,10 @@ extern "system" fn get_joypad_input_hook(_base: InputFlags) -> InputFlags {
 
     let gamemode = unsafe { read::<u32>(GAMEMODE_VA) };
     let connected = is_connected();
-    let scene = if gamemode == GAMEMODE_INGAME {
-        Scene::InGame
-    } else {
-        Scene::Other
+    let (scene, menu_input) = match gamemode {
+        GAMEMODE_MENU => navigate(thread),
+        GAMEMODE_INGAME => (Scene::InGame, InputFlags::empty()),
+        _ => (Scene::Other, InputFlags::empty()),
     };
 
     observe_loads(thread);
@@ -196,6 +198,7 @@ extern "system" fn get_joypad_input_hook(_base: InputFlags) -> InputFlags {
             }
             input
         }
+        (true, GAMEMODE_MENU) => menu_input,
         _ => Action::neutral().into(),
     }
 }
@@ -225,6 +228,7 @@ unsafe fn install() {
             .retarget(get_joypad_input_hook as *mut ());
 
         practice::install();
+        menu::install();
         hit::install();
 
         let game = GetModuleHandleA(null());
