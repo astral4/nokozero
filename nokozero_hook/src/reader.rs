@@ -1,6 +1,7 @@
 use crate::addrs::{
-    BULLET_MANAGER_PTR_VA, ENEMY_MANAGER_PTR_VA, ITEM_MANAGER_PTR_VA, LASER_MANAGER_PTR_VA,
-    PLAYER_PTR_VA,
+    BOMB_FRAGMENTS_VA, BOMBS_VA, BULLET_MANAGER_PTR_VA, ENEMY_MANAGER_PTR_VA, GAME_TICK_VA,
+    GRAZE_VA, ITEM_MANAGER_PTR_VA, LASER_MANAGER_PTR_VA, LIFE_FRAGMENTS_VA, LIVES_VA,
+    PLAYER_PTR_VA, POWER_VA, SCORE_DIV10_VA, VALUE_VA,
 };
 use crate::mem::{game_live, read};
 use std::process::abort;
@@ -199,6 +200,38 @@ pub(crate) struct Player {
     pub(crate) pos_y: f32,
     pub(crate) is_focused: bool,
     pub(crate) hitbox_radius: f32,
+}
+
+pub(crate) struct Resources {
+    /// Frames since the stage started.
+    pub(crate) game_tick: u32,
+    pub(crate) score_div10: u32,
+    pub(crate) graze: i32,
+    pub(crate) value_x100: i32,
+    pub(crate) power: i32,
+    pub(crate) lives: i32,
+    pub(crate) life_fragments: i32,
+    pub(crate) bombs: i32,
+    pub(crate) bomb_fragments: i32,
+}
+
+impl Resources {
+    #[must_use]
+    pub(crate) fn read() -> Self {
+        unsafe {
+            Self {
+                game_tick: read(GAME_TICK_VA),
+                score_div10: read(SCORE_DIV10_VA),
+                graze: read(GRAZE_VA),
+                value_x100: read(VALUE_VA),
+                power: read(POWER_VA),
+                lives: read(LIVES_VA),
+                life_fragments: read(LIFE_FRAGMENTS_VA),
+                bombs: read(BOMBS_VA),
+                bomb_fragments: read(BOMB_FRAGMENTS_VA),
+            }
+        }
+    }
 }
 
 /// A non-null read-only pointer into process memory.

@@ -5,6 +5,8 @@ pub(crate) const STAGE_CURRENT_VA: usize = 0x004e_73f0;
 /// The menu-selected stage, 1–7. 7 = Extra.
 pub(crate) const STAGE_SELECT_VA: usize = 0x004e_73f4;
 pub(crate) const CURRENT_CHAPTER_VA: usize = 0x004e_73f8;
+/// The number of frames since the stage started.
+pub(crate) const GAME_TICK_VA: usize = 0x004e_73fc;
 /// The selected character, 0-3 (Reimu/Marisa/Sanae/Reisen).
 pub(crate) const CHARACTER_VA: usize = 0x004e_7404;
 /// The current score divided by 10.

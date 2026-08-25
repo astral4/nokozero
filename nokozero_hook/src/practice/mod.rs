@@ -22,6 +22,7 @@ use crate::addrs::{
     GAMEMODE_TO_SWITCH_TO_VA, GRAZE_VA, GUI_PTR_VA, LIFE_FRAGMENTS_VA, LIVES_VA, LOADER_RUNNING_VA,
     POWER_VA, SCORE_DIV10_VA, STAGE_CURRENT_VA, STAGE_SELECT_VA, VALUE_VA,
 };
+use crate::hit::count;
 use crate::mem::{read, stage_stable, write};
 use crate::patch::{NearBranchSite, Site, op_abs32};
 use crate::thread::{MainCell, MainThread, MainToken};
@@ -232,6 +233,7 @@ pub(crate) struct WireMeta {
     pub(crate) reset_seq: u32,
     pub(crate) reset_outcome: Outcome,
     pub(crate) applied_section: u32,
+    pub(crate) hits: u32,
 }
 
 impl WireMeta {
@@ -243,6 +245,7 @@ impl WireMeta {
             reset_seq,
             reset_outcome,
             applied_section,
+            hits: count(thread, load_generation),
         }
     }
 }

@@ -7,87 +7,202 @@ std::arch::global_asm!(".globl __Unwind_Resume", "__Unwind_Resume:", "ud2");
 
 mod addrs;
 mod dinput8;
+mod env;
+mod features;
+mod hit;
+mod ipc;
 mod mem;
 mod patch;
 mod practice;
 mod reader;
 mod thread;
 
+use crate::addrs::{GAMEMODE_INGAME, GAMEMODE_VA, GUI_PTR_VA};
+use crate::features::{Meta, Scene, build as build_features};
+use crate::hit::take_forced_step;
+use crate::ipc::{Command, ObsFrame, is_connected, step};
+use crate::mem::{game_live, read, read_ptr};
 use crate::patch::{CallSite, NearBranchSite};
-use crate::practice::{apply_pending_reset, observe_loads};
-use crate::reader::GameState;
+use crate::practice::{WireMeta, accept_reset, apply_pending_reset, observe_loads};
+use crate::reader::{GameState, Resources};
 use crate::thread::{MainCell, MainThread, MainToken};
 use bitflags::bitflags;
 use std::ffi::c_void;
+use std::process::abort;
 use windows_sys::Win32::Foundation::{HINSTANCE, HMODULE};
 use windows_sys::Win32::System::LibraryLoader::DisableThreadLibraryCalls;
 use windows_sys::Win32::System::SystemServices::DLL_PROCESS_ATTACH;
 use windows_sys::core::BOOL;
 
-/// The number of frames between each game state read.
-const READ_INTERVAL: u32 = 6;
+/// The number of frames between RL steps.
+const READ_INTERVAL: u32 = 3;
+
+/// Rising-edge cadence for injected inputs (e.g. during menu navigation and dialogue).
+const TAP_INTERVAL: u32 = 3;
 
 static FRAME_COUNT: MainCell<u32> = MainCell::new(0);
 
-static GAME_STATE: MainCell<Option<GameState>> = MainCell::new(None);
+static STEP_BUFS: MainCell<Option<StepBufs>> = MainCell::new(None);
+
+/// Set when an in-game frame delivers an action differing from [`LAST_ACTION`].
+static INPUT_OVERRIDDEN: MainCell<bool> = MainCell::new(false);
+
+/// The last controller action. Repeated on the frames between exchanges.
+static LAST_ACTION: MainCell<Action> = MainCell::new(Action::neutral());
+
+struct StepBufs {
+    state: GameState,
+    frame_buf: Vec<u8>,
+}
+
+impl StepBufs {
+    fn new() -> Self {
+        Self {
+            state: GameState::new(),
+            frame_buf: Vec::new(),
+        }
+    }
+}
+
+/// A controller-supplied action. The action space is a subset of [`InputFlags`].
+#[derive(Clone, Copy)]
+struct Action(u32);
+
+impl Action {
+    // SHOOT | BOMB | FOCUS | UP | DOWN | LEFT | RIGHT
+    const MASK: u32 = 0b1111_1011;
+
+    fn from_wire(bits: u32) -> Option<Self> {
+        (bits & !Self::MASK == 0).then_some(Self(bits))
+    }
+
+    const fn neutral() -> Self {
+        Self(0)
+    }
+}
 
 bitflags! {
     #[repr(transparent)]
     struct InputFlags: u32 {
-        const SHOOT = 0x1;
-        const BOMB = 0x2;
-        const FOCUS = 0x8;
+        const SHOOT = 0x1; // Z
+        const BOMB = 0x2; // X
+        const FOCUS = 0x8; // Shift
         const UP = 0x10;
         const DOWN = 0x20;
         const LEFT = 0x40;
         const RIGHT = 0x80;
-        const PAUSE = 0x100;
-        const SKIP = 0x200;
-        const ITEM = 0x400;
-        const CHANGE = 0x800;
-        const RETRY = 0x20000;
-        const SCREENSHOT = 0x40000;
-        const ENTER = 0x80000;
+        const SKIP = 0x200; // Ctrl, C
 
-        // The source may set any bits
         const _ = !0;
     }
 }
 
-extern "system" fn get_joypad_input_hook(base: InputFlags) -> InputFlags {
+impl From<Action> for InputFlags {
+    fn from(action: Action) -> Self {
+        // `Action::from_wire` already proved every set bit is in `MASK`.
+        Self::from_bits_retain(action.0)
+    }
+}
+
+/// Returns whether a boss dialogue is live in this frame.
+fn dialogue_active() -> bool {
+    const GUI_MSG_VM_OFFSET: usize = 0x1b8;
+
+    if !unsafe { game_live() } {
+        return false;
+    }
+    let Some(gui) = (unsafe { read_ptr(GUI_PTR_VA) }) else {
+        return false;
+    };
+    // SAFETY: The GUI object is live at this point.
+    unsafe { read::<u32>(gui + GUI_MSG_VM_OFFSET) != 0 }
+}
+
+extern "system" fn get_joypad_input_hook(_base: InputFlags) -> InputFlags {
     let thread = MainThread::claim();
     // SAFETY: This hook is called from the game's update loop, so its thread is the update thread.
     let token = unsafe { MainToken::new(thread) };
 
+    let gamemode = unsafe { read::<u32>(GAMEMODE_VA) };
+    let connected = is_connected();
+    let scene = if gamemode == GAMEMODE_INGAME {
+        Scene::InGame
+    } else {
+        Scene::Other
+    };
+
     observe_loads(thread);
 
-    let frame = FRAME_COUNT.get(thread);
-    FRAME_COUNT.set(thread, frame.wrapping_add(1));
+    if connected {
+        let frame = FRAME_COUNT.get(thread);
+        FRAME_COUNT.set(thread, frame.wrapping_add(1));
 
-    if frame.is_multiple_of(READ_INTERVAL) {
-        let mut state = GAME_STATE
-            .replace(thread, None)
-            .unwrap_or_else(GameState::new);
-        if let Some(_state) = state.read() {
-            // TODO: send the observation
+        let forced = take_forced_step(thread);
+        if frame.is_multiple_of(READ_INTERVAL) || forced {
+            let resources = Resources::read();
+            let mut bufs = STEP_BUFS
+                .replace(thread, None)
+                .unwrap_or_else(StepBufs::new);
+
+            let StepBufs { state, frame_buf } = &mut bufs;
+            let state = state.read();
+            let wire = WireMeta::read(thread);
+            let mut obs = ObsFrame::begin(frame_buf);
+            build_features(
+                obs.payload(),
+                state,
+                &Meta {
+                    step: frame,
+                    scene,
+                    wire,
+                    overrode_input: INPUT_OVERRIDDEN.replace(thread, false),
+                },
+                &resources,
+            );
+
+            match step(obs) {
+                Some(Command::Act(action)) => LAST_ACTION.set(thread, action),
+                Some(Command::Reset { seq, params }) => {
+                    if !accept_reset(thread, seq, params) {
+                        eprintln!(
+                            "nokozero_hook: ipc: RESET rejected; another reset is still pending"
+                        );
+                        abort();
+                    }
+                    LAST_ACTION.set(thread, Action::neutral());
+                }
+                None => {}
+            }
+
+            STEP_BUFS.set(thread, Some(bufs));
         }
-        GAME_STATE.set(thread, Some(state));
+
+        apply_pending_reset(token);
     }
 
-    apply_pending_reset(token);
-
-    // TODO: send inputs
-    base
+    match (connected, gamemode) {
+        (true, GAMEMODE_INGAME) => {
+            let mut input: InputFlags = LAST_ACTION.get(thread).into();
+            if dialogue_active() {
+                INPUT_OVERRIDDEN.set(thread, true);
+                input.remove(InputFlags::SHOOT);
+                if FRAME_COUNT.get(thread).is_multiple_of(TAP_INTERVAL) {
+                    input.insert(InputFlags::SHOOT);
+                }
+                input.insert(InputFlags::SKIP);
+            }
+            input
+        }
+        _ => Action::neutral().into(),
+    }
 }
 
 #[unsafe(no_mangle)]
 extern "system" fn DllMain(h_module: HINSTANCE, reason: u32, _reserved: *mut c_void) -> BOOL {
     if reason == DLL_PROCESS_ATTACH {
         unsafe { DisableThreadLibraryCalls(h_module as HMODULE) };
-
         unsafe { install() };
     }
-
     1
 }
 
@@ -107,5 +222,8 @@ unsafe fn install() {
             .retarget(get_joypad_input_hook as *mut ());
 
         practice::install();
+        hit::install();
     }
+
+    ipc::init();
 }
