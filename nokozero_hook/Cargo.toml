@@ -11,10 +11,20 @@ license = "MIT OR Apache-2.0"
 publish = false
 
 [dependencies]
-bitflags = "2.11.1"
+bitflags = "2.13.1"
+windows = { version = "0.62", default-features = false, features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D9",
+    "Win32_Graphics_Gdi",
+] }
+windows-core = { version = "0.62", default-features = false }
+windows-numerics = { version = "0.3", default-features = false }
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_System_Diagnostics_Debug",
+    "Win32_System_IO",
+    "Win32_System_Kernel",
     "Win32_System_LibraryLoader",
     "Win32_System_Memory",
     "Win32_System_SystemInformation",

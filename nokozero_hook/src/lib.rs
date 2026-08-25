@@ -10,6 +10,7 @@ mod dialog;
 mod dinput8;
 mod env;
 mod features;
+mod headless;
 mod hit;
 mod iat;
 mod ipc;
@@ -22,6 +23,7 @@ mod thread;
 
 use crate::addrs::{GAMEMODE_INGAME, GAMEMODE_MENU, GAMEMODE_VA, GUI_PTR_VA};
 use crate::features::{Meta, Scene, build as build_features};
+use crate::headless::init_from_env;
 use crate::hit::take_forced_step;
 use crate::ipc::{Command, ObsFrame, is_connected, step};
 use crate::mem::{game_live, read, read_ptr};
@@ -207,6 +209,7 @@ extern "system" fn get_joypad_input_hook(_base: InputFlags) -> InputFlags {
 extern "system" fn DllMain(h_module: HINSTANCE, reason: u32, _reserved: *mut c_void) -> BOOL {
     if reason == DLL_PROCESS_ATTACH {
         unsafe { DisableThreadLibraryCalls(h_module as HMODULE) };
+        init_from_env();
         unsafe { install() };
     }
     1
@@ -234,6 +237,10 @@ unsafe fn install() {
         let game = GetModuleHandleA(null());
 
         dialog::install(game);
+
+        if headless::is_enabled() {
+            headless::install(game);
+        }
     }
 
     ipc::init();
