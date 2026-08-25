@@ -10,8 +10,14 @@ use windows_sys::Win32::System::Threading::GetCurrentProcess;
 /// The length of a rel32 branch (opcode plus disp32).
 const REL32_LEN: usize = 5;
 
+/// The length of a short branch (opcode plus disp8).
+const SHORT_LEN: usize = 2;
+
 /// The length of a near conditional branch (`0F`-prefixed opcode plus disp32).
 const NEAR_LEN: usize = 6;
+
+/// The short unconditional-jmp opcode.
+const JMP_SHORT: u8 = 0xeb;
 
 /// When a byte mismatch was caught.
 #[derive(Clone, Copy)]
@@ -63,6 +69,16 @@ const fn rel32(opcode: u8, site: u32, target: u32) -> [u8; 5] {
     #[expect(clippy::cast_possible_truncation)]
     let d = disp32(site.wrapping_add(REL32_LEN as u32), target);
     [opcode, d[0], d[1], d[2], d[3]]
+}
+
+/// Returns the disp8 of a short branch at `site` reaching forward to `target`.
+#[expect(clippy::cast_possible_truncation)]
+const fn rel8(site: u32, target: u32) -> u8 {
+    let next = site + SHORT_LEN as u32;
+    assert!(target >= next, "target must be forward of the branch");
+    let disp = target - next;
+    assert!(disp <= i8::MAX as u32, "rel8 cannot reach the target");
+    disp as u8
 }
 
 /// A patch site.
@@ -167,6 +183,35 @@ impl CallSite {
     /// `hook` must have the original callee's calling convention and signature.
     pub(crate) unsafe fn retarget(&self, hook: *mut ()) {
         unsafe { self.0.write_relative_branch(hook, 0xe8) };
+    }
+}
+
+/// A 2-byte `cc rel8` conditional branch.
+#[derive(Clone, Copy)]
+pub(crate) struct BranchSite {
+    site: Site<SHORT_LEN>,
+    target: u32,
+}
+
+impl BranchSite {
+    #[must_use]
+    pub(crate) const fn new(addr: u32, opcode: u8, taken_target: u32, name: &'static str) -> Self {
+        assert!(opcode & 0xf0 == 0x70, "not a short conditional branch");
+        Self {
+            site: Site::new(addr, [opcode, rel8(addr, taken_target)], name),
+            target: taken_target,
+        }
+    }
+
+    /// Constructs a [`Patch`] rewriting the conditional branch as an unconditional `EB rel8` to `land`.
+    pub(crate) const fn redirect(self, land: u32) -> Patch<SHORT_LEN> {
+        self.site.patch([JMP_SHORT, rel8(self.site.addr, land)])
+    }
+
+    /// Constructs a [`Patch`] rewriting the conditional branch to always be taken,
+    /// landing exactly on the target that the expected bytes were derived from.
+    pub(crate) const fn force(self) -> Patch<SHORT_LEN> {
+        self.redirect(self.target)
     }
 }
 
@@ -275,7 +320,7 @@ unsafe fn read_at<const N: usize>(addr: u32) -> [u8; N] {
 /// If `prot` excludes EXECUTE, no other thread may execute anywhere on the affected pages.
 /// Writes through `f` must stay within `[addr, addr + len)`.
 #[must_use]
-unsafe fn with_writable<R>(
+pub(crate) unsafe fn with_writable<R>(
     addr: *mut u8,
     len: usize,
     prot: PAGE_PROTECTION_FLAGS,

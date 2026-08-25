@@ -6,10 +6,12 @@ compile_error!("nokozero_hook targets i686-pc-windows-gnu");
 std::arch::global_asm!(".globl __Unwind_Resume", "__Unwind_Resume:", "ud2");
 
 mod addrs;
+mod dialog;
 mod dinput8;
 mod env;
 mod features;
 mod hit;
+mod iat;
 mod ipc;
 mod mem;
 mod patch;
@@ -29,8 +31,9 @@ use crate::thread::{MainCell, MainThread, MainToken};
 use bitflags::bitflags;
 use std::ffi::c_void;
 use std::process::abort;
+use std::ptr::null;
 use windows_sys::Win32::Foundation::{HINSTANCE, HMODULE};
-use windows_sys::Win32::System::LibraryLoader::DisableThreadLibraryCalls;
+use windows_sys::Win32::System::LibraryLoader::{DisableThreadLibraryCalls, GetModuleHandleA};
 use windows_sys::Win32::System::SystemServices::DLL_PROCESS_ATTACH;
 use windows_sys::core::BOOL;
 
@@ -223,6 +226,10 @@ unsafe fn install() {
 
         practice::install();
         hit::install();
+
+        let game = GetModuleHandleA(null());
+
+        dialog::install(game);
     }
 
     ipc::init();
