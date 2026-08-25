@@ -2,6 +2,7 @@
 
 mod backing;
 mod d3d9;
+mod dsound;
 mod out;
 mod window;
 
@@ -27,6 +28,7 @@ pub(crate) fn is_enabled() -> bool {
 pub(crate) unsafe fn install(game: HMODULE) {
     unsafe {
         d3d9::install(game);
+        dsound::install(game);
         window::install(game);
     }
 }

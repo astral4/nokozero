@@ -17,6 +17,8 @@ windows = { version = "0.62", default-features = false, features = [
     "Win32_Graphics_Direct3D",
     "Win32_Graphics_Direct3D9",
     "Win32_Graphics_Gdi",
+    "Win32_Media_Audio",
+    "Win32_Media_Audio_DirectSound",
 ] }
 windows-core = { version = "0.62", default-features = false }
 windows-numerics = { version = "0.3", default-features = false }
