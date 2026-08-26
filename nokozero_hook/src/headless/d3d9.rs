@@ -1,4 +1,4 @@
-//! Implementation of `Direct3D9` for headless execution.
+//! Implementation of Direct3D 9 for headless execution.
 
 // `#[implement]` triggers these lints.
 #![expect(trivial_casts, clippy::inline_always, clippy::ref_as_ptr)]
