@@ -1,7 +1,7 @@
 //! In-process byte patching primitives.
 
+use crate::log::fatal;
 use std::fmt::{Display, Formatter, Result as FmtResult};
-use std::process::abort;
 use std::ptr::{copy_nonoverlapping, with_exposed_provenance, with_exposed_provenance_mut};
 use windows_sys::Win32::System::Diagnostics::Debug::FlushInstructionCache;
 use windows_sys::Win32::System::Memory::{PAGE_READWRITE, VirtualProtect};
@@ -154,15 +154,14 @@ impl<const N: usize> Site<N> {
             && resolved == hook_addr
             && actual[REL32_LEN..] == bytes[REL32_LEN..];
         if !ok {
-            eprintln!(
-                "nokozero_hook: install failed at {}: post-write mismatch at {:#010x}: \
+            fatal!(
+                "install failed at {}: post-write mismatch at {:#010x}: \
                 wrote [{}] found [{}], branch lands at {resolved:#010x}, hook is at {hook_addr:#010x}",
                 self.name,
                 self.addr,
                 Hex(&bytes),
                 Hex(&actual),
             );
-            abort();
         }
     }
 }
@@ -281,8 +280,7 @@ unsafe fn patch_bytes(addr: u32, src: &[u8], name: &str) {
         })
     };
     if written.is_none() {
-        eprintln!("nokozero_hook: install failed at {name}");
-        abort();
+        fatal!("install failed at {name}");
     }
 }
 
@@ -294,13 +292,12 @@ unsafe fn patch_bytes(addr: u32, src: &[u8], name: &str) {
 unsafe fn expect_bytes<const N: usize>(addr: u32, expected: &[u8; N], name: &str, stage: Stage) {
     let actual = unsafe { read_at::<N>(addr) };
     if actual != *expected {
-        eprintln!(
-            "nokozero_hook: install failed at {name}: {} mismatch at {addr:#010x}: expected [{}] found [{}]",
+        fatal!(
+            "install failed at {name}: {} mismatch at {addr:#010x}: expected [{}] found [{}]",
             stage.as_str(),
             Hex(expected),
             Hex(&actual),
         );
-        abort();
     }
 }
 

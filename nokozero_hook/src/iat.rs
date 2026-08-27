@@ -1,10 +1,10 @@
 //! IAT hooking utilities.
 
+use crate::log::fatal;
 use crate::patch::with_writable;
 use std::ffi::{CStr, c_char};
 use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::mem::offset_of;
-use std::process::abort;
 use std::ptr::{NonNull, read_unaligned, write_unaligned};
 use windows_sys::Win32::Foundation::HMODULE;
 use windows_sys::Win32::System::Diagnostics::Debug::{
@@ -43,14 +43,12 @@ impl Display for ImportRef {
 /// In practice, this means this function should be called during `DLL_PROCESS_ATTACH`.
 pub(crate) unsafe fn hook_import(game: HMODULE, import: ImportRef, hook: *mut ()) {
     let Some(slot_ptr) = (unsafe { find_iat_slot(game, import) }) else {
-        eprintln!("nokozero_hook: iat: import not found: {import}");
-        abort();
+        fatal!("import not found: {import}");
     };
     let slot_raw = slot_ptr.as_ptr();
     let current = unsafe { read_unaligned(slot_raw) };
     if current.is_null() {
-        eprintln!("nokozero_hook: iat: null slot: {import}");
-        abort();
+        fatal!("null slot: {import}");
     }
     let written = unsafe {
         with_writable(slot_raw.cast(), size_of::<*mut ()>(), |_| {
@@ -58,8 +56,7 @@ pub(crate) unsafe fn hook_import(game: HMODULE, import: ImportRef, hook: *mut ()
         })
     };
     if written.is_none() {
-        eprintln!("nokozero_hook: iat: slot unwritable: {import}");
-        abort();
+        fatal!("slot unwritable: {import}");
     }
 }
 

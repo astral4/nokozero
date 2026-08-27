@@ -6,10 +6,10 @@
 use super::backing::Backing;
 use super::out::{get_zeroed, get_zeroed_array, put};
 use crate::iat::{ImportRef, hook_import};
+use crate::log::fatal;
 use std::cmp::max;
 use std::ffi::c_void;
 use std::iter::zip;
-use std::process::abort;
 use std::ptr::null_mut;
 use std::sync::Arc;
 use windows::Win32::Foundation::{E_NOTIMPL, HANDLE, HWND, POINT, RECT};
@@ -107,8 +107,7 @@ fn bytes_per_pixel(format: D3DFORMAT) -> u32 {
         | D3DFMT_X4R4G4B4 | D3DFMT_A8L8 | D3DFMT_D16 | D3DFMT_L16 => 2,
         D3DFMT_A8 | D3DFMT_L8 | D3DFMT_R3G3B2 | D3DFMT_A4L4 => 1,
         other => {
-            eprintln!("nokozero_hook: d3d9: unknown D3DFORMAT: {}", other.0);
-            abort();
+            fatal!("unknown D3DFORMAT: {}", other.0);
         }
     }
 }
@@ -118,8 +117,7 @@ fn row_pitch(width: u32, format: D3DFORMAT) -> u32 {
         .checked_mul(bytes_per_pixel(format))
         .and_then(|bytes| bytes.checked_next_multiple_of(4))
         .unwrap_or_else(|| {
-            eprintln!("nokozero_hook: d3d9: row_pitch overflow: width {width}");
-            abort();
+            fatal!("row_pitch overflow: width {width}");
         })
 }
 
@@ -127,8 +125,7 @@ fn surface_bytes(pitch: u32, height: u32) -> usize {
     if let Some(bytes) = pitch.checked_mul(max(height, 1)) {
         bytes as usize
     } else {
-        eprintln!("nokozero_hook: d3d9: surface size overflow: pitch {pitch}, height {height}");
-        abort();
+        fatal!("surface size overflow: pitch {pitch}, height {height}");
     }
 }
 
@@ -490,11 +487,11 @@ impl IDirect3DDevice9_Impl for FakeDevice_Impl {
         if requested != self.back_buffer {
             let (w, h, f) = self.back_buffer;
             let (rw, rh, rf) = requested;
-            eprintln!(
-                "nokozero_hook: d3d9: Reset with changed params: have {w}x{h} format {}, asked for {rw}x{rh} format {}",
-                f.0, rf.0
+            fatal!(
+                "Reset with changed params: have {w}x{h} format {}, asked for {rw}x{rh} format {}",
+                f.0,
+                rf.0
             );
-            abort();
         }
         Ok(())
     }

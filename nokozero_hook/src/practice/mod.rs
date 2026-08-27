@@ -18,6 +18,7 @@ use crate::addrs::{
     GAMEMODE_TO_SWITCH_TO_VA, GRAZE_VA, GUI_PTR_VA, LIFE_FRAGMENTS_VA, LIVES_VA, LOADER_RUNNING_VA,
     POWER_VA, SCORE_DIV10_VA, STAGE_CURRENT_VA, STAGE_SELECT_VA, VALUE_VA,
 };
+use crate::log::fatal;
 use crate::mem::{read, stage_stable, write};
 use crate::patch::{NearBranchSite, Site, op_abs32};
 use crate::practice::catalog::apply_section;
@@ -30,7 +31,6 @@ use crate::thread::{MainCell, MainThread, MainToken};
 use std::arch::naked_asm;
 use std::ffi::c_void;
 use std::mem::transmute;
-use std::process::abort;
 use std::ptr::with_exposed_provenance;
 
 #[derive(Clone, Copy)]
@@ -149,8 +149,7 @@ static LIFECYCLE: MainCell<Option<Lifecycle>> = MainCell::new(Some(Lifecycle::IN
 /// Checks the lifecycle out of its cell for the duration of `f`, aborting if it is already checked out.
 fn with_lifecycle<R>(thread: MainThread, f: impl FnOnce(&mut Lifecycle) -> R) -> R {
     let Some(mut lc) = LIFECYCLE.replace(thread, None) else {
-        eprintln!("nokozero_hook: practice: lifecycle re-entered");
-        abort();
+        fatal!("lifecycle re-entered");
     };
     let result = f(&mut lc);
     LIFECYCLE.set(thread, Some(lc));

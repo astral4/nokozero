@@ -1,8 +1,8 @@
 //! Constructs for main-thread identity and access.
 
+use crate::log::fatal;
 use std::cell::Cell;
 use std::marker::PhantomData;
-use std::process::abort;
 use std::sync::atomic::{AtomicU32, Ordering};
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 
@@ -10,10 +10,7 @@ static MAIN_TID: AtomicU32 = AtomicU32::new(0);
 
 fn off_main_thread(current: u32) -> ! {
     let main = MAIN_TID.load(Ordering::Relaxed);
-    eprintln!(
-        "nokozero_hook: thread: main-thread state touched from thread {current} (main thread: {main})"
-    );
-    abort();
+    fatal!("main-thread state touched from thread {current} (main thread: {main})");
 }
 
 /// A zero-sized, runtime-checked witness that the calling thread is the game's update ("main") thread. Required by [`MainCell`] accessors.

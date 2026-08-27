@@ -1,10 +1,10 @@
 //! Logic for automatically hiding windows during headless execution.
 
 use crate::iat::{ImportRef, hook_import};
+use crate::log::fatal;
 use crate::patch::NearBranchSite;
 use std::ffi::c_void;
 use std::mem::transmute;
-use std::process::abort;
 use std::ptr::{null_mut, with_exposed_provenance, with_exposed_provenance_mut};
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 use windows_sys::Win32::Foundation::{HMODULE, HWND, LPARAM, LRESULT, WPARAM};
@@ -100,8 +100,7 @@ unsafe fn install_visibility_override(hwnd: HWND) {
     let prev = unsafe { SetWindowLongA(hwnd, GWLP_WNDPROC, filter) };
     // A real window always has a non-null wndproc, so 0 means failure.
     if prev == 0 {
-        eprintln!("nokozero_hook: window: failed to override window visibility");
-        abort();
+        fatal!("failed to override window visibility");
     }
     PREV_WNDPROC.store(prev.cast_unsigned() as usize, Ordering::Release);
 }

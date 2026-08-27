@@ -8,10 +8,10 @@
 
 use crate::Action;
 use crate::env::connect_addr;
+use crate::log::fatal;
 use crate::practice::{PARAMS_LEN, PracticeParams};
 use std::io::{ErrorKind, Read as _, Write as _};
 use std::net::TcpStream;
-use std::process::abort;
 use std::sync::OnceLock;
 use std::thread::{Builder as ThreadBuilder, sleep};
 use std::time::Duration;
@@ -35,23 +35,18 @@ const CMD_RESET: u8 = 0x02;
 
 static STREAM: OnceLock<TcpStream> = OnceLock::new();
 
-fn die(reason: &str) -> ! {
-    eprintln!("nokozero_hook: ipc: {reason}");
-    abort();
-}
-
 /// This should be called once during `DLL_PROCESS_ATTACH`.
 pub(crate) fn init() {
     let Some(addr) = connect_addr() else {
-        die("NOKOZERO_CONNECT is not set");
+        fatal!("NOKOZERO_CONNECT is not set");
     };
-    eprintln!("nokozero_hook: ipc: attached, dialing {addr}");
+    eprintln!("nokozero_hook::ipc: attached, dialing {addr}");
     if ThreadBuilder::new()
         .name("nokozero-ipc".into())
         .spawn(move || connect(&addr))
         .is_err()
     {
-        die("could not spawn the connector thread");
+        fatal!("could not spawn the connector thread");
     }
 }
 
@@ -66,16 +61,16 @@ fn connect(addr: &str) {
                 return;
             }
             Err(error) if error.kind() == ErrorKind::ConnectionRefused => {
-                die(&format!("{addr} refused the connection ({error})"));
+                fatal!("{addr} refused the connection ({error})");
             }
             Err(error) => last_error = Some(error),
         }
         sleep(CONNECT_RETRY);
     }
-    match last_error {
-        Some(error) => die(&format!("connect deadline exceeded (last error: {error})")),
-        None => die("connect deadline exceeded"),
+    if let Some(error) = last_error {
+        fatal!("connect deadline exceeded (last error: {error})");
     }
+    fatal!("connect deadline exceeded");
 }
 
 pub(crate) fn is_connected() -> bool {
@@ -114,9 +109,7 @@ impl<'a> ObsFrame<'a> {
         #[expect(clippy::cast_possible_truncation)]
         let len = (self.buf.len() - 4) as u32; // tag + payload
         if len > MAX_OBS {
-            die(&format!(
-                "outbound frame of {len} bytes exceeds MAX_OBS ({MAX_OBS})"
-            ));
+            fatal!("outbound frame of {len} bytes exceeds MAX_OBS ({MAX_OBS})");
         }
         self.buf[..4].copy_from_slice(&len.to_le_bytes());
         self.buf[4] = tag;
@@ -135,37 +128,37 @@ pub(crate) fn step(obs: ObsFrame<'_>) -> Option<Command> {
         .and_then(|()| writer.flush())
         .is_err()
     {
-        die("send failed");
+        fatal!("send failed");
     }
 
     let mut body = [0u8; MAX_CMD];
     let payload = if let Some(len) = recv_frame(stream, &mut body) {
         &body[1..len]
     } else {
-        die("recv failed")
+        fatal!("recv failed");
     };
 
     match body[0] {
         CMD_ACT => {
             let Ok(bytes) = <[u8; 4]>::try_from(payload) else {
-                die("bad ACT length");
+                fatal!("bad ACT length");
             };
             let Some(action) = Action::from_wire(u32::from_le_bytes(bytes)) else {
-                die("ACT outside the action mask");
+                fatal!("ACT outside the action mask");
             };
             Some(Command::Act(action))
         }
         CMD_RESET => {
             if payload.len() != 4 + PARAMS_LEN {
-                die("bad RESET length");
+                fatal!("bad RESET length");
             }
             let seq = u32::from_le_bytes(payload[..4].try_into().unwrap());
             let Some(params) = PracticeParams::parse(&payload[4..]) else {
-                die("RESET params invalid");
+                fatal!("RESET params invalid");
             };
             Some(Command::Reset { seq, params })
         }
-        _ => die("unknown command tag"),
+        _ => fatal!("unknown command tag"),
     }
 }
 

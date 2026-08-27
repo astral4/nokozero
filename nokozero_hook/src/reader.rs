@@ -5,8 +5,8 @@ use crate::addrs::{
     GRAZE_VA, ITEM_MANAGER_PTR_VA, LASER_MANAGER_PTR_VA, LIFE_FRAGMENTS_VA, LIVES_VA,
     PLAYER_PTR_VA, POWER_VA, SCORE_DIV10_VA, VALUE_VA,
 };
+use crate::log::fatal;
 use crate::mem::{game_live, read};
-use std::process::abort;
 use std::ptr::{NonNull, with_exposed_provenance_mut};
 
 const BULLETS_LIST: usize = 0x68;
@@ -446,10 +446,7 @@ fn get_lasers(lasers_ptr: GamePtr, lasers: &mut Lasers) {
                 2 => {
                     let num_nodes = unsafe { laser.read::<u32>(CURVE_LASER_NUM_NODES) } as usize;
                     if num_nodes > CURVE_LASER_MAX_NODES {
-                        eprintln!(
-                            "nokozero_hook: reader: unexpected curve laser node count {num_nodes}"
-                        );
-                        abort();
+                        fatal!("unexpected curve laser node count {num_nodes}");
                     }
                     if let Some(base) = unsafe { laser.read_ptr(CURVE_LASER_NODES_ARRAY) } {
                         for i in 0..num_nodes {
@@ -472,8 +469,7 @@ fn get_lasers(lasers_ptr: GamePtr, lasers: &mut Lasers) {
                     }
                 }
                 _ => {
-                    eprintln!("nokozero_hook: reader: unexpected laser type {laser_type}");
-                    abort();
+                    fatal!("unexpected laser type {laser_type}");
                 }
             }
         }

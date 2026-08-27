@@ -1,7 +1,7 @@
 //! A stable host-memory allocation handed to the game via `Lock` / `LockRect`.
 
+use crate::log::fatal;
 use std::cmp::max;
-use std::process::abort;
 use std::ptr::NonNull;
 
 pub(super) struct Backing(NonNull<[u8]>);
@@ -25,11 +25,10 @@ impl Backing {
                 .checked_add(bytes)
                 .is_some_and(|end| end <= self.len());
         if !in_range {
-            eprintln!(
-                "nokozero_hook: backing: {bytes} bytes at offset {offset} out of range (allocation is {} bytes)",
+            fatal!(
+                "{bytes} bytes at offset {offset} out of range (allocation is {} bytes)",
                 self.len()
             );
-            abort();
         }
         // SAFETY: `offset..offset + bytes` was just checked to be inside the allocation.
         unsafe { self.0.cast::<u8>().as_ptr().add(offset) }

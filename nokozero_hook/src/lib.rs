@@ -13,6 +13,7 @@ mod features;
 mod headless;
 mod iat;
 mod ipc;
+mod log;
 mod mem;
 mod menu;
 mod patch;
@@ -24,6 +25,7 @@ use crate::addrs::{GAMEMODE_INGAME, GAMEMODE_MENU, GAMEMODE_VA, GUI_PTR_VA};
 use crate::features::{Meta, Scene, build as build_features};
 use crate::headless::init_from_env;
 use crate::ipc::{Command, ObsFrame, is_connected, step};
+use crate::log::fatal;
 use crate::mem::{game_live, read, read_ptr};
 use crate::menu::navigate;
 use crate::patch::{CallSite, NearBranchSite};
@@ -34,7 +36,6 @@ use crate::reader::{GameState, Resources};
 use crate::thread::{MainCell, MainThread, MainToken};
 use bitflags::bitflags;
 use std::ffi::c_void;
-use std::process::abort;
 use std::ptr::null;
 use windows_sys::Win32::Foundation::{HINSTANCE, HMODULE};
 use windows_sys::Win32::System::LibraryLoader::{DisableThreadLibraryCalls, GetModuleHandleA};
@@ -171,10 +172,7 @@ extern "system" fn get_joypad_input_hook(_base: InputFlags) -> InputFlags {
                 Some(Command::Act(action)) => LAST_ACTION.set(thread, action),
                 Some(Command::Reset { seq, params }) => {
                     if !accept_reset(thread, seq, params) {
-                        eprintln!(
-                            "nokozero_hook: ipc: RESET rejected; another reset is still pending"
-                        );
-                        abort();
+                        fatal!("RESET rejected; another reset is still pending");
                     }
                     LAST_ACTION.set(thread, Action::neutral());
                 }

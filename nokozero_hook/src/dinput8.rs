@@ -1,8 +1,8 @@
 //! `dinput8.dll` proxy that loads the real System32 `DirectInput8Create` and forwards to it.
 
+use crate::log::fatal;
 use std::ffi::c_void;
 use std::mem::transmute;
-use std::process::abort;
 use std::sync::LazyLock;
 use windows_sys::Win32::Foundation::{HINSTANCE, MAX_PATH};
 use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
@@ -18,11 +18,6 @@ type DirectInput8CreateFn = unsafe extern "system" fn(
 ) -> HRESULT;
 
 static REAL: LazyLock<DirectInput8CreateFn> = LazyLock::new(load_real);
-
-fn die(step: &str) -> ! {
-    eprintln!("nokozero_hook: dinput8: {step}");
-    abort();
-}
 
 fn load_real() -> DirectInput8CreateFn {
     const SUFFIX: [u16; 13] = {
@@ -42,19 +37,19 @@ fn load_real() -> DirectInput8CreateFn {
     let len = unsafe { GetSystemDirectoryW(buf.as_mut_ptr(), MAX_PATH) } as usize;
     let end = len + SUFFIX.len();
     if len == 0 || end > buf.len() {
-        die("GetSystemDirectoryW failed");
+        fatal!("GetSystemDirectoryW failed");
     }
     buf[len..end].copy_from_slice(&SUFFIX);
 
     let dll = unsafe { LoadLibraryW(buf.as_ptr()) };
     if dll.is_null() {
-        die("failed to load the real dinput8.dll");
+        fatal!("failed to load the real dinput8.dll");
     }
     if let Some(create) = unsafe { GetProcAddress(dll, c"DirectInput8Create".as_ptr().cast()) } {
         // SAFETY: The real export's signature matches `DirectInput8CreateFn`.
         unsafe { transmute::<unsafe extern "system" fn() -> isize, DirectInput8CreateFn>(create) }
     } else {
-        die("DirectInput8Create is not exported by the real dinput8.dll");
+        fatal!("DirectInput8Create is not exported by the real dinput8.dll");
     }
 }
 

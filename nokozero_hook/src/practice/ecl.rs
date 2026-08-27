@@ -1,9 +1,9 @@
 //! In-memory ECL patching.
 
 use crate::addrs::ENEMY_MANAGER_PTR_VA;
+use crate::log::fatal;
 use crate::mem::read_ptr;
 use crate::thread::MainToken;
-use std::process::abort;
 use std::ptr::{NonNull, copy_nonoverlapping, with_exposed_provenance_mut};
 
 const ECL_FILE_MANAGER_OFFSET: usize = 0x17c;
@@ -35,20 +35,6 @@ unsafe fn resolve_file_array_offset() -> Option<usize> {
 unsafe fn read_slot(file_array_offset: usize, ordinal: usize) -> Option<NonNull<u8>> {
     let ptr = unsafe { read_ptr(file_array_offset + ordinal * 4) }?;
     NonNull::new(with_exposed_provenance_mut(ptr))
-}
-
-fn null_file_slot(ordinal: usize) -> ! {
-    eprintln!(
-        "nokozero_hook: ecl: file slot {ordinal} is null; this stage has fewer ECL files than expected"
-    );
-    abort();
-}
-
-fn id_mismatch(ordinal: usize, pos: u32, expect: u16, found: u16) -> ! {
-    eprintln!(
-        "nokozero_hook: ecl: file {ordinal} offset {pos:#x}: expected instruction id {expect:#X}, found {found:#X}"
-    );
-    abort();
 }
 
 struct UndoEntry {
@@ -149,7 +135,7 @@ impl Ecl {
         // SAFETY: The array resolved in `Ecl::new`, the stage stays loaded for the cursor's lifetime,
         // and every ordinal passed by the warp tables is a small constant within the file manager's fixed-capacity array.
         let Some(file) = (unsafe { read_slot(self.file_array_offset, ordinal) }) else {
-            null_file_slot(ordinal);
+            fatal!("file slot {ordinal} is null; this stage has fewer ECL files than expected");
         };
         self.file = file;
         self.file_ordinal = ordinal;
@@ -175,7 +161,10 @@ impl Ecl {
                 .read_unaligned()
         };
         if id != expect {
-            id_mismatch(self.file_ordinal, pos, expect, id);
+            fatal!(
+                "file {} offset {pos:#x}: expected instruction id {expect:#X}, found {id:#X}",
+                self.file_ordinal
+            );
         }
     }
 
