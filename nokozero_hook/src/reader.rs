@@ -73,12 +73,7 @@ impl GameState {
                 rays: Vec::new(),
                 curve_points: Vec::new(),
             },
-            player: Player {
-                pos_x: 0.,
-                pos_y: 0.,
-                is_focused: false,
-                hitbox_radius: 0.,
-            },
+            player: Player::default(),
         }
     }
 
@@ -124,12 +119,7 @@ impl GameState {
         self.lasers.segments.clear();
         self.lasers.rays.clear();
         self.lasers.curve_points.clear();
-        self.player = Player {
-            pos_x: 0.,
-            pos_y: 0.,
-            is_focused: false,
-            hitbox_radius: 0.,
-        };
+        self.player = Player::default();
     }
 }
 
@@ -195,6 +185,7 @@ pub(crate) struct CurvePoint {
     pub(crate) width: f32,
 }
 
+#[derive(Default)]
 pub(crate) struct Player {
     pub(crate) pos_x: f32,
     pub(crate) pos_y: f32,
