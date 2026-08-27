@@ -144,31 +144,24 @@ struct LiveWarp {
     undo: EclUndo,
 }
 
-/// The value is `None` while the value is checked out (i.e. inside one of the transition wrappers below or [`on_gt_tick`]).
+/// The value is `None` while the value is checked out (i.e. inside [`with_lifecycle`]).
 static LIFECYCLE: MainCell<Option<Lifecycle>> = MainCell::new(Some(Lifecycle::INIT));
 
-/// Takes the lifecycle out of its cell, aborting if it is already checked out.
-fn take_lifecycle(thread: MainThread) -> Lifecycle {
-    if let Some(lc) = LIFECYCLE.replace(thread, None) {
-        lc
-    } else {
+/// Checks the lifecycle out of its cell for the duration of `f`, aborting if it is already checked out.
+fn with_lifecycle<R>(thread: MainThread, f: impl FnOnce(&mut Lifecycle) -> R) -> R {
+    let Some(mut lc) = LIFECYCLE.replace(thread, None) else {
         eprintln!("nokozero_hook: practice: lifecycle re-entered");
         abort();
-    }
-}
-
-/// Returns the checked-out lifecycle to its cell.
-fn put_lifecycle(thread: MainThread, lc: Lifecycle) {
+    };
+    let result = f(&mut lc);
     LIFECYCLE.set(thread, Some(lc));
+    result
 }
 
 /// Accepts a decoded RESET command. Returns `false` if a reset is already pending.
 #[must_use]
 pub(crate) fn accept_reset(thread: MainThread, seq: u32, params: PracticeParams) -> bool {
-    let mut lc = take_lifecycle(thread);
-    let accepted = lc.accept(seq, params);
-    put_lifecycle(thread, lc);
-    accepted
+    with_lifecycle(thread, |lc| lc.accept(seq, params))
 }
 
 /// Attempts `Requested` -> `Reloading`, returning the writes for the caller to perform.
@@ -177,18 +170,9 @@ fn try_start_reload(thread: MainThread, stable_ingame: bool) -> Option<ReloadPla
     let status = HANDOFF.status();
     let loader_running = unsafe { read::<u32>(LOADER_RUNNING_VA) } == 1;
     let current_stage = unsafe { read::<u32>(STAGE_CURRENT_VA) };
-    let mut lc = take_lifecycle(thread);
-    let plan = lc.try_start_reload(stable_ingame, status, loader_running, current_stage);
-    put_lifecycle(thread, lc);
-    plan
-}
-
-/// Returns the wire values `(load_generation, reset_seq, reset_outcome, applied_section)`.
-fn wire(thread: MainThread) -> (Generation, u32, Outcome, u32) {
-    let lc = take_lifecycle(thread);
-    let tuple = lc.wire();
-    put_lifecycle(thread, lc);
-    tuple
+    with_lifecycle(thread, |lc| {
+        lc.try_start_reload(stable_ingame, status, loader_running, current_stage)
+    })
 }
 
 pub(crate) struct WireMeta {
@@ -202,7 +186,8 @@ pub(crate) struct WireMeta {
 impl WireMeta {
     #[must_use]
     pub(crate) fn read(thread: MainThread) -> Self {
-        let (load_generation, reset_seq, reset_outcome, applied_section) = wire(thread);
+        let (load_generation, reset_seq, reset_outcome, applied_section) =
+            with_lifecycle(thread, |lc| lc.wire());
         Self {
             load_generation,
             reset_seq,
@@ -262,9 +247,7 @@ unsafe extern "C" fn gt_tick_trampoline() -> ! {
 extern "C" fn on_gt_tick() -> Verdict {
     let thread = MainThread::current();
     let status = HANDOFF.status();
-    let mut lc = take_lifecycle(thread);
-    let run = guard_tick(thread, &mut lc, status);
-    put_lifecycle(thread, lc);
+    let run = with_lifecycle(thread, |lc| guard_tick(thread, lc, status));
     if run { Verdict::Run } else { Verdict::Divert }
 }
 
@@ -372,9 +355,7 @@ fn write_resources(token: MainToken, p: &PracticeParams) {
 /// Observes one supervisor frame, consuming any unrequested publish.
 pub(crate) fn observe_loads(thread: MainThread) {
     let status = HANDOFF.status();
-    let mut lc = take_lifecycle(thread);
-    lc.observe(status);
-    put_lifecycle(thread, lc);
+    with_lifecycle(thread, |lc| lc.observe(status));
 }
 
 /// Starts a requested reset's reload. The request remains pending unless the game is in stable gameplay,
