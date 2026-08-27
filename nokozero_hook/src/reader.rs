@@ -1,3 +1,5 @@
+//! Logic for reading game entity data from process memory.
+
 use crate::addrs::{
     BOMB_FRAGMENTS_VA, BOMBS_VA, BULLET_MANAGER_PTR_VA, ENEMY_MANAGER_PTR_VA, GAME_TICK_VA,
     GRAZE_VA, ITEM_MANAGER_PTR_VA, LASER_MANAGER_PTR_VA, LIFE_FRAGMENTS_VA, LIVES_VA,
