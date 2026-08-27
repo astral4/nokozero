@@ -201,7 +201,7 @@ extern "system" fn get_joypad_input_hook(_base: InputFlags) -> InputFlags {
             input
         }
         (true, GAMEMODE_MENU) => menu_input,
-        _ => Action::neutral().into(),
+        _ => InputFlags::empty(),
     }
 }
 
