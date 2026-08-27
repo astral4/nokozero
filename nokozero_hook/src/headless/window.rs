@@ -1,7 +1,7 @@
 //! Logic for automatically hiding windows during headless execution.
 
 use crate::iat::{ImportRef, hook_import};
-use crate::patch::{NearBranchSite, Site, op_abs32};
+use crate::patch::NearBranchSite;
 use std::ffi::c_void;
 use std::mem::transmute;
 use std::process::abort;
@@ -10,11 +10,8 @@ use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 use windows_sys::Win32::Foundation::{HMODULE, HWND, LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallWindowProcA, CreateWindowExA, GWLP_WNDPROC, HMENU, SWP_SHOWWINDOW, SetWindowLongA,
-    WINDOWPOS, WM_WINDOWPOSCHANGING, WNDPROC, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_SYSMENU,
-    WS_VISIBLE,
+    WINDOWPOS, WM_WINDOWPOSCHANGING, WNDPROC, WS_VISIBLE,
 };
-
-const CREATE_STYLE: u32 = WS_VISIBLE | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX;
 
 static MAIN_HWND: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
 static PREV_WNDPROC: AtomicUsize = AtomicUsize::new(0);
@@ -24,14 +21,6 @@ static PREV_WNDPROC: AtomicUsize = AtomicUsize::new(0);
 /// `game` must be a loaded module handle. This function must be called during `DLL_PROCESS_ATTACH`, before the game's entry point runs.
 pub(super) unsafe fn install(game: HMODULE) {
     unsafe {
-        Site::new(
-            0x0047_30bc,
-            op_abs32(0x68, CREATE_STYLE),
-            "create game window hidden",
-        )
-        .patch(op_abs32(0x68, CREATE_STYLE & !WS_VISIBLE))
-        .apply();
-
         const {
             NearBranchSite::new(0x0047_1b90, 0x84, 0x0047_1c9a, "window mode change skip").force()
         }
@@ -60,6 +49,13 @@ unsafe extern "system" fn hook_create_window_ex_a(
     lp_param: *mut c_void,
 ) -> HWND {
     let is_main = h_wnd_parent.is_null() && unsafe { is_base_class(lp_class_name) };
+    // Create the main window hidden. `filter_wndproc` blocks later show attempts
+    // but cannot cover the initial map that `WS_VISIBLE` triggers during this call.
+    let dw_style = if is_main {
+        dw_style & !WS_VISIBLE
+    } else {
+        dw_style
+    };
     let hwnd = unsafe {
         CreateWindowExA(
             dw_ex_style,
