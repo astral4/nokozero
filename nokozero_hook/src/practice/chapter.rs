@@ -8,6 +8,7 @@ use crate::mem::write;
 use crate::patch::Site;
 use crate::thread::{MainThread, MainToken, PerLoad};
 use std::arch::naked_asm;
+use std::mem::take;
 
 /// The committed warp's [`ChapterIntent`].
 static SCHEDULED_INTENT: PerLoad<ChapterIntent> = PerLoad::new(ChapterIntent::NONE);
@@ -54,12 +55,7 @@ unsafe extern "C" fn chapter_score_trampoline() -> ! {
 extern "C" fn on_chapter_score() -> Verdict {
     let thread = MainThread::current();
     let suppressed = SCHEDULED_INTENT.update(thread, load_generation(), |intent| {
-        if intent.skip_remaining == 0 {
-            None
-        } else {
-            intent.skip_remaining -= 1;
-            Some(())
-        }
+        (intent.skip_remaining != 0).then(|| intent.skip_remaining -= 1)
     });
     if suppressed.is_some() {
         Verdict::Divert
@@ -130,13 +126,10 @@ unsafe extern "C" fn st7_chapter_bonus_trampoline() -> ! {
 
 extern "C" fn on_st7_chapter_bonus() {
     let thread = MainThread::current();
+    // `update` only stores the modified value back when the closure returns `Some(_)`,
+    // so the unconditional `take` cannot clear a flag it does not consume.
     let owed = SCHEDULED_INTENT.update(thread, load_generation(), |intent| {
-        if intent.st7_bonus {
-            intent.st7_bonus = false;
-            Some(())
-        } else {
-            None
-        }
+        take(&mut intent.st7_bonus).then_some(())
     });
     if owed.is_none() {
         return;
