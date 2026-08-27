@@ -104,7 +104,7 @@ unsafe fn install_visibility_override(hwnd: HWND) {
     let prev = unsafe { SetWindowLongA(hwnd, GWLP_WNDPROC, filter) };
     // A real window always has a non-null wndproc, so 0 means failure.
     if prev == 0 {
-        eprintln!("nokozero_hook: failed to override window visiblity");
+        eprintln!("nokozero_hook: window: failed to override window visibility");
         abort();
     }
     PREV_WNDPROC.store(prev.cast_unsigned() as usize, Ordering::Release);
