@@ -6,11 +6,20 @@
 //! These values are still exact below 2^24.
 
 use crate::practice::WireMeta;
-use crate::reader::{GameState, Resources};
+use crate::reader::{
+    Bullet, CurvePoint, Enemy, GameState, Item, RayLaser, Resources, SegmentLaser,
+};
 
 const META_WORDS: usize = 22;
 /// Bullets; enemies; items; segment lasers; ray lasers; curve laser points.
-const SECTION_WIDTHS: [usize; 6] = [5, 8, 5, 6, 8, 5];
+const SECTION_WIDTHS: [usize; 6] = [
+    Bullet::WIDTH,
+    Enemy::WIDTH,
+    Item::WIDTH,
+    SegmentLaser::WIDTH,
+    RayLaser::WIDTH,
+    CurvePoint::WIDTH,
+];
 
 /// Bit in the frame flags word to indicate that the hook rewrote the controller's action on at least one frame
 /// since the previous exchange. This is set on the observation following the overridden frames.
@@ -34,12 +43,12 @@ pub(crate) struct Meta {
 /// Appends the observation payload to `buf`.
 pub(crate) fn build(buf: &mut Vec<u8>, state: Option<&GameState>, meta: &Meta, res: &Resources) {
     let rows = state.map_or(0, |s| {
-        s.bullets.len() * SECTION_WIDTHS[0]
-            + s.enemies.len() * SECTION_WIDTHS[1]
-            + s.items.len() * SECTION_WIDTHS[2]
-            + s.lasers.segments.len() * SECTION_WIDTHS[3]
-            + s.lasers.rays.len() * SECTION_WIDTHS[4]
-            + s.lasers.curve_points.len() * SECTION_WIDTHS[5]
+        s.bullets.len() * Bullet::WIDTH
+            + s.enemies.len() * Enemy::WIDTH
+            + s.items.len() * Item::WIDTH
+            + s.lasers.segments.len() * SegmentLaser::WIDTH
+            + s.lasers.rays.len() * RayLaser::WIDTH
+            + s.lasers.curve_points.len() * CurvePoint::WIDTH
     });
     buf.reserve(4 * (META_WORDS + SECTION_WIDTHS.len() + rows));
 
@@ -58,70 +67,106 @@ pub(crate) fn build(buf: &mut Vec<u8>, state: Option<&GameState>, meta: &Meta, r
         return;
     };
 
-    put_count(buf, state.bullets.len());
-    for b in &state.bullets {
-        put_f32s(buf, [b.pos_x, b.pos_y, b.vel_x, b.vel_y, b.hitbox_radius]);
-    }
+    put_section(buf, &state.bullets, Bullet::cells);
+    put_section(buf, &state.enemies, Enemy::cells);
+    put_section(buf, &state.items, Item::cells);
+    put_section(buf, &state.lasers.segments, SegmentLaser::cells);
+    put_section(buf, &state.lasers.rays, RayLaser::cells);
+    put_section(buf, &state.lasers.curve_points, CurvePoint::cells);
+}
 
-    put_count(buf, state.enemies.len());
-    for e in &state.enemies {
-        #[expect(clippy::cast_precision_loss)]
-        put_f32s(
-            buf,
-            [
-                e.pos_x,
-                e.pos_y,
-                e.vel_x,
-                e.vel_y,
-                e.hitbox_radius,
-                e.hp_ratio,
-                e.max_hp as f32,
-                f32::from(u8::from(e.is_boss)),
-            ],
-        );
-    }
+impl Bullet {
+    const WIDTH: usize = 5;
 
-    put_count(buf, state.items.len());
-    for i in &state.items {
-        #[expect(clippy::cast_precision_loss)]
-        put_f32s(buf, [i.pos_x, i.pos_y, i.vel_x, i.vel_y, i.kind as f32]);
+    fn cells(&self) -> [f32; Self::WIDTH] {
+        [
+            self.pos_x,
+            self.pos_y,
+            self.vel_x,
+            self.vel_y,
+            self.hitbox_radius,
+        ]
     }
+}
 
-    put_count(buf, state.lasers.segments.len());
-    for l in &state.lasers.segments {
-        put_f32s(
-            buf,
-            [
-                l.head_pos_x,
-                l.head_pos_y,
-                l.vel_x,
-                l.vel_y,
-                l.length,
-                l.width,
-            ],
-        );
+impl Enemy {
+    const WIDTH: usize = 8;
+
+    #[expect(clippy::cast_precision_loss)]
+    fn cells(&self) -> [f32; Self::WIDTH] {
+        [
+            self.pos_x,
+            self.pos_y,
+            self.vel_x,
+            self.vel_y,
+            self.hitbox_radius,
+            self.hp_ratio,
+            self.max_hp as f32,
+            f32::from(u8::from(self.is_boss)),
+        ]
     }
+}
 
-    put_count(buf, state.lasers.rays.len());
-    for l in &state.lasers.rays {
-        put_f32s(
-            buf,
-            [
-                l.origin_pos_x,
-                l.origin_pos_y,
-                l.origin_vel_x,
-                l.origin_vel_y,
-                l.cos_angle,
-                l.sin_angle,
-                l.angular_vel,
-                l.width,
-            ],
-        );
+impl Item {
+    const WIDTH: usize = 5;
+
+    #[expect(clippy::cast_precision_loss)]
+    fn cells(&self) -> [f32; Self::WIDTH] {
+        [
+            self.pos_x,
+            self.pos_y,
+            self.vel_x,
+            self.vel_y,
+            self.kind as f32,
+        ]
     }
+}
 
-    put_count(buf, state.lasers.curve_points.len());
-    for p in &state.lasers.curve_points {
-        put_f32s(buf, [p.pos_x, p.pos_y, p.vel_x, p.vel_y, p.width]);
+impl SegmentLaser {
+    const WIDTH: usize = 6;
+
+    fn cells(&self) -> [f32; Self::WIDTH] {
+        [
+            self.head_pos_x,
+            self.head_pos_y,
+            self.vel_x,
+            self.vel_y,
+            self.length,
+            self.width,
+        ]
+    }
+}
+
+impl RayLaser {
+    const WIDTH: usize = 8;
+
+    fn cells(&self) -> [f32; Self::WIDTH] {
+        [
+            self.origin_pos_x,
+            self.origin_pos_y,
+            self.origin_vel_x,
+            self.origin_vel_y,
+            self.cos_angle,
+            self.sin_angle,
+            self.angular_vel,
+            self.width,
+        ]
+    }
+}
+
+impl CurvePoint {
+    const WIDTH: usize = 5;
+
+    fn cells(&self) -> [f32; Self::WIDTH] {
+        [self.pos_x, self.pos_y, self.vel_x, self.vel_y, self.width]
+    }
+}
+
+/// Appends one entity section consisting of a `u32` row count followed by each row's cells.
+fn put_section<T, const N: usize>(buf: &mut Vec<u8>, rows: &[T], cells: impl Fn(&T) -> [f32; N]) {
+    put_count(buf, rows.len());
+    for row in rows {
+        put_f32s(buf, cells(row));
     }
 }
 
