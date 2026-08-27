@@ -309,9 +309,9 @@ enum Op {
         at: u32,
         v: u32,
     },
-    /// `ChapterIntent::skip_chapters`.
+    /// Sets `ChapterIntent::skip_remaining`.
     Skip(i32),
-    /// `ChapterIntent::request_st7_chapter_bonus`.
+    /// Sets `ChapterIntent::st7_bonus`.
     St7Bonus,
     /// Jumps to the boss section of the specified stage script, selects the boss ECL file, and skips the chapters left behind.
     /// Leaves the boss file selected.

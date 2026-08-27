@@ -10,38 +10,12 @@ use crate::thread::{MainThread, MainToken, PerLoad};
 use std::arch::naked_asm;
 
 /// The committed warp's [`ChapterIntent`].
-#[derive(Clone, Copy)]
-struct ScheduledIntent {
-    /// How many more chapter-end events should skip completion scoring.
-    skip_remaining: i32,
-    /// The value of `ECLSetChapter(n)` to be set as the current chapter.
-    set_chapter: Option<i32>,
-    /// Whether the extra stage chapter bonus write is needed. See [`on_st7_chapter_bonus`].
-    st7_bonus: bool,
-}
-
-impl ScheduledIntent {
-    const NONE: Self = Self {
-        skip_remaining: 0,
-        set_chapter: None,
-        st7_bonus: false,
-    };
-}
-
-static SCHEDULED_INTENT: PerLoad<ScheduledIntent> = PerLoad::new(ScheduledIntent::NONE);
+static SCHEDULED_INTENT: PerLoad<ChapterIntent> = PerLoad::new(ChapterIntent::NONE);
 
 impl ChapterIntent {
     /// Schedules the intent recorded by the committed warp for this load's chapter hooks.
     pub(super) fn schedule(self, thread: MainThread, generation: Generation) {
-        SCHEDULED_INTENT.set(
-            thread,
-            generation,
-            ScheduledIntent {
-                skip_remaining: self.skip,
-                set_chapter: self.set,
-                st7_bonus: self.st7_bonus,
-            },
-        );
+        SCHEDULED_INTENT.set(thread, generation, self);
     }
 }
 
