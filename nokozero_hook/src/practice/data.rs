@@ -2138,7 +2138,7 @@ const fn warp_index(section: u32) -> Option<usize> {
     None
 }
 
-/// Chapter-warp entry-jump start offsets for eacn stage.
+/// Chapter-warp entry-jump start offsets for each stage.
 const CHAPTER_STARTS: [u32; 7] = [0x7248, 0x74a0, 0xa280, 0x8634, 0x9f34, 0x91f8, 0x8f94];
 
 enum ChapterEffect {
