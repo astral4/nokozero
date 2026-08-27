@@ -22,8 +22,8 @@ mod reader;
 mod thread;
 
 use crate::addrs::{GAMEMODE_INGAME, GAMEMODE_MENU, GAMEMODE_VA, GUI_PTR_VA};
+use crate::env::Config;
 use crate::features::{Meta, Scene, build as build_features};
-use crate::headless::init_from_env;
 use crate::ipc::{Command, ObsFrame, is_connected, step};
 use crate::log::fatal;
 use crate::mem::{game_live, read, read_ptr};
@@ -207,8 +207,11 @@ extern "system" fn get_joypad_input_hook(_base: InputFlags) -> InputFlags {
 extern "system" fn DllMain(h_module: HINSTANCE, reason: u32, _reserved: *mut c_void) -> BOOL {
     if reason == DLL_PROCESS_ATTACH {
         unsafe { DisableThreadLibraryCalls(h_module as HMODULE) };
-        init_from_env();
+
+        let config = Config::from_env();
+        headless::init(config.headless);
         unsafe { install() };
+        ipc::init(config.connect_addr);
     }
     1
 }
@@ -239,6 +242,4 @@ unsafe fn install() {
             headless::install(game);
         }
     }
-
-    ipc::init();
 }

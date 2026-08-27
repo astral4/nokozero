@@ -7,7 +7,6 @@ mod out;
 mod window;
 
 use crate::addrs::{GAMEMODE_INGAME, GAMEMODE_VA};
-use crate::env::headless;
 use crate::patch::{BranchSite, Site, op_abs32};
 use std::arch::naked_asm;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -16,8 +15,8 @@ use windows_sys::Win32::Foundation::HMODULE;
 static HEADLESS: AtomicBool = AtomicBool::new(false);
 
 /// This should be called during `DLL_PROCESS_ATTACH`, before [`install`].
-pub(crate) fn init_from_env() {
-    HEADLESS.store(headless(), Ordering::Relaxed);
+pub(crate) fn init(headless: bool) {
+    HEADLESS.store(headless, Ordering::Relaxed);
 }
 
 #[must_use]

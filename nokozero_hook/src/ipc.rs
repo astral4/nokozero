@@ -7,7 +7,6 @@
 //! so the game advances at the driver's step rate.
 
 use crate::Action;
-use crate::env::connect_addr;
 use crate::log::fatal;
 use crate::practice::{PARAMS_LEN, PracticeParams};
 use std::io::{ErrorKind, Read as _, Write as _};
@@ -36,10 +35,7 @@ const CMD_RESET: u8 = 0x02;
 static STREAM: OnceLock<TcpStream> = OnceLock::new();
 
 /// This should be called once during `DLL_PROCESS_ATTACH`.
-pub(crate) fn init() {
-    let Some(addr) = connect_addr() else {
-        fatal!("NOKOZERO_CONNECT is not set");
-    };
+pub(crate) fn init(addr: String) {
     eprintln!("nokozero_hook::ipc: attached, dialing {addr}");
     if ThreadBuilder::new()
         .name("nokozero-ipc".into())
