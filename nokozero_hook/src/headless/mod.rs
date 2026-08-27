@@ -43,7 +43,7 @@ unsafe fn install_frame_limiter_skips() {
         const {
             BranchSite::new(
                 0x0047_276d,
-                0x7e,
+                0x7E,
                 0x0047_2772,
                 "frame limiter skip (vsync-paced tick)",
             )
@@ -53,7 +53,7 @@ unsafe fn install_frame_limiter_skips() {
         const {
             BranchSite::new(
                 0x0047_2b3f,
-                0x7e,
+                0x7E,
                 0x0047_2b48,
                 "frame limiter skip (present-interval tick)",
             )
@@ -118,7 +118,7 @@ draw_skip_trampoline!(
 
 unsafe fn install_draw_chain_skip() {
     // `mov eax, [device]`
-    const DRAW_SITE_BYTES: [u8; 5] = op_abs32(0xa1, DEVICE_PTR_VA);
+    const DRAW_SITE_BYTES: [u8; 5] = op_abs32(0xA1, DEVICE_PTR_VA);
 
     unsafe {
         Site::new(

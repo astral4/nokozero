@@ -164,7 +164,7 @@ unsafe fn find_iat_slot(module: HMODULE, import: ImportRef) -> Option<NonNull<*m
                         imp_name.eq_ignore_ascii_case(want.as_bytes())
                     }
                     ImportRef::Ordinal { ordinal, .. } if entry & IMAGE_ORDINAL_FLAG32 != 0 => {
-                        entry & 0xffff == u32::from(ordinal)
+                        entry & 0xFFFF == u32::from(ordinal)
                     }
                     ImportRef::Name(_) | ImportRef::Ordinal { .. } => false,
                 };

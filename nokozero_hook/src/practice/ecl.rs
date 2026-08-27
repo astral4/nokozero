@@ -8,10 +8,10 @@ use std::ptr::{NonNull, copy_nonoverlapping, with_exposed_provenance_mut};
 
 const ECL_FILE_MANAGER_OFFSET: usize = 0x17c;
 const ECL_FILE_DATA_POINTERS_OFFSET: usize = 0xc;
-// The instruction size is `0x18` and the opcode is `0xc`.
-const ECL_JUMP_HEADER: u32 = 0x0018_000c;
-// There are 2 parameters and the rank mask is `0xff`.
-const ECL_JUMP_DESCRIPTOR: u32 = 0x02ff_0000;
+// The instruction size is `0x18` and the opcode is `0xC`.
+const ECL_JUMP_HEADER: u32 = 0x0018_000C;
+// There are 2 parameters and the rank mask is `0xFF`.
+const ECL_JUMP_DESCRIPTOR: u32 = 0x02FF_0000;
 
 const MAX_UNDO_WRITE: usize = 8;
 
@@ -46,7 +46,7 @@ fn null_file_slot(ordinal: usize) -> ! {
 
 fn id_mismatch(ordinal: usize, pos: u32, expect: u16, found: u16) -> ! {
     eprintln!(
-        "nokozero_hook: ecl: file {ordinal} offset {pos:#x}: expected instruction id {expect:#x}, found {found:#x}"
+        "nokozero_hook: ecl: file {ordinal} offset {pos:#x}: expected instruction id {expect:#X}, found {found:#X}"
     );
     abort();
 }

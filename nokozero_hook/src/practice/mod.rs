@@ -242,7 +242,7 @@ enum Verdict {
 /// The entry of `GameThread::on_tick`.
 const GT_TICK: Site<6> = Site::new(
     0x0043_cc50,
-    [0x55, 0x8b, 0xec, 0x83, 0xe4, 0xf8],
+    [0x55, 0x8B, 0xEC, 0x83, 0xE4, 0xF8],
     "game-tick guard",
 );
 static GT_TICK_CONTINUE_VA: u32 = GT_TICK.after();

@@ -17,7 +17,7 @@ const SHORT_LEN: usize = 2;
 const NEAR_LEN: usize = 6;
 
 /// The short unconditional-jmp opcode.
-const JMP_SHORT: u8 = 0xeb;
+const JMP_SHORT: u8 = 0xEB;
 
 /// When a byte mismatch was caught.
 #[derive(Clone, Copy)]
@@ -46,7 +46,7 @@ impl Display for Hex<'_> {
             if i > 0 {
                 f.write_str(" ")?;
             }
-            write!(f, "{b:02x}")?;
+            write!(f, "{b:02X}")?;
         }
         Ok(())
     }
@@ -123,7 +123,7 @@ impl<const N: usize> Site<N> {
     /// In practice, this means this function should be called during `DLL_PROCESS_ATTACH`.
     /// `hook` must be sound to enter with the register and stack state at the site, in place of the displaced instructions.
     pub(crate) unsafe fn jmp(&self, hook: *mut ()) {
-        unsafe { self.write_relative_branch(hook, 0xe9) };
+        unsafe { self.write_relative_branch(hook, 0xE9) };
     }
 
     unsafe fn write_relative_branch(&self, hook: *mut (), opcode: u8) {
@@ -201,7 +201,7 @@ pub(crate) struct CallSite(Site<REL32_LEN>);
 impl CallSite {
     #[must_use]
     pub(crate) const fn new(addr: u32, callee: u32, name: &'static str) -> Self {
-        Self(Site::new(addr, rel32(0xe8, addr, callee), name))
+        Self(Site::new(addr, rel32(0xE8, addr, callee), name))
     }
 
     /// Rewrites the call to enter `hook` in place of the original callee. `hook` returns into the instruction after the call.
@@ -212,7 +212,7 @@ impl CallSite {
     /// In practice, this means this function should be called during `DLL_PROCESS_ATTACH`.
     /// `hook` must have the original callee's calling convention and signature.
     pub(crate) unsafe fn retarget(&self, hook: *mut ()) {
-        unsafe { self.0.write_relative_branch(hook, 0xe8) };
+        unsafe { self.0.write_relative_branch(hook, 0xE8) };
     }
 }
 
@@ -226,7 +226,7 @@ pub(crate) struct BranchSite {
 impl BranchSite {
     #[must_use]
     pub(crate) const fn new(addr: u32, opcode: u8, taken_target: u32, name: &'static str) -> Self {
-        assert!(opcode & 0xf0 == 0x70, "not a short conditional branch");
+        assert!(opcode & 0xF0 == 0x70, "not a short conditional branch");
         Self {
             site: Site::new(addr, [opcode, rel8(addr, taken_target)], name),
             target: taken_target,
@@ -253,18 +253,18 @@ pub(crate) struct NearBranchSite {
 impl NearBranchSite {
     #[must_use]
     pub(crate) const fn new(addr: u32, opcode: u8, taken_target: u32, name: &'static str) -> Self {
-        assert!(opcode & 0xf0 == 0x80, "not a near conditional branch");
+        assert!(opcode & 0xF0 == 0x80, "not a near conditional branch");
         #[expect(clippy::cast_possible_truncation)]
         let d = disp32(addr.wrapping_add(NEAR_LEN as u32), taken_target);
         Self {
-            site: Site::new(addr, [0x0f, opcode, d[0], d[1], d[2], d[3]], name),
+            site: Site::new(addr, [0x0F, opcode, d[0], d[1], d[2], d[3]], name),
         }
     }
 
     /// Constructs a [`Patch`] forcing the branch to always be taken.
     pub(crate) const fn force(self) -> Patch<NEAR_LEN> {
         let e = self.site.expected;
-        self.site.patch([0x90, 0xe9, e[2], e[3], e[4], e[5]])
+        self.site.patch([0x90, 0xE9, e[2], e[3], e[4], e[5]])
     }
 
     /// Constructs a [`Patch`] forcing the branch to never be taken.

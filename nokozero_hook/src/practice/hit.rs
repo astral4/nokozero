@@ -10,7 +10,7 @@ use std::mem::take;
 
 const PLAYER_DIE: Site<6> = Site::new(
     0x0045_6540,
-    [0x55, 0x8b, 0xec, 0x83, 0xec, 0x14], // `push ebp; mov ebp, esp; sub esp, 0x14`
+    [0x55, 0x8B, 0xEC, 0x83, 0xEC, 0x14], // `push ebp; mov ebp, esp; sub esp, 0x14`
     "player-die detour",
 );
 static PLAYER_DIE_CONTINUE_VA: u32 = PLAYER_DIE.after();

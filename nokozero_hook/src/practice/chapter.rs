@@ -39,7 +39,7 @@ static SCHEDULED_INTENT: PerLoad<ChapterIntent> = PerLoad::new(ChapterIntent::NO
 
 const CHAPTER_SCORE: Site<6> = Site::new(
     0x0043_d0ad,
-    [0x8b, 0x87, 0xb0, 0x00, 0x00, 0x00], // `mov eax, dword ptr [edi + 0xb0]`
+    [0x8B, 0x87, 0xB0, 0x00, 0x00, 0x00], // `mov eax, dword ptr [edi + 0xb0]`
     "chapter-score detour",
 );
 
@@ -83,7 +83,7 @@ extern "C" fn on_chapter_score() -> Verdict {
 
 const CHAPTER_SET: Site<6> = Site::new(
     0x0043_dd58,
-    [0x8d, 0x93, 0x9c, 0x00, 0x00, 0x00],
+    [0x8D, 0x93, 0x9C, 0x00, 0x00, 0x00],
     "chapter-set detour",
 );
 
@@ -121,7 +121,7 @@ extern "C" fn on_chapter_set() {
 
 const ST7_CHAPTER_BONUS: Site<5> = Site::new(
     0x0043_dece,
-    [0xc2, 0x04, 0x00, 0xcc, 0xcc],
+    [0xC2, 0x04, 0x00, 0xCC, 0xCC],
     "st7 chapter-bonus detour",
 );
 

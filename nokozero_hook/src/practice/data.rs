@@ -447,7 +447,7 @@ impl Op {
                 // Every `*_SPELL_START` holds an id-0x2a instruction.
                 emit(PrimOp::Jump {
                     start,
-                    expect: 0x2a,
+                    expect: 0x2A,
                     dest,
                     at_frame,
                     ecl_time: 0,
@@ -494,16 +494,16 @@ impl Op {
             Op::St6BossEffect { pos_str } => {
                 emit(PrimOp::SeqAt {
                     pos: ST6_EFFECT_BLOCK,
-                    expect: 0x2a,
+                    expect: 0x2A,
                     words: &[
                         0,
-                        0x0014_012e,
-                        0x01ff_0000,
+                        0x0014_012E,
+                        0x01FF_0000,
                         0,
                         3,
                         0,
-                        0x0018_012f,
-                        0x02ff_0000,
+                        0x0018_012F,
+                        0x02FF_0000,
                         0,
                         3,
                         6,
@@ -511,11 +511,11 @@ impl Op {
                 });
                 let tail = [
                     0,
-                    0x0020_000f,
-                    0x01ff_0000,
+                    0x0020_000F,
+                    0x01FF_0000,
                     0,
-                    0xc,
-                    0x7373_6f42,
+                    0xC,
+                    0x7373_6F42,
                     pos_str,
                     0x0000_0073,
                 ];
@@ -553,13 +553,13 @@ impl Op {
                     emit(PrimOp::Seq {
                         words: &[
                             0,
-                            0x0014_012e,
-                            0x01ff_0000,
+                            0x0014_012E,
+                            0x01FF_0000,
                             0,
                             5,
                             0,
-                            0x0018_012f,
-                            0x02ff_0000,
+                            0x0018_012F,
+                            0x02FF_0000,
                             0,
                             3,
                             6,
@@ -568,12 +568,12 @@ impl Op {
                     emit(PrimOp::Seq {
                         words: &[
                             0,
-                            0x0020_000f,
-                            0x01ff_0000,
+                            0x0020_000F,
+                            0x01FF_0000,
                             0,
-                            0xc,
-                            0x7373_6f42,
-                            0x6f70_5f34,
+                            0xC,
+                            0x7373_6F42,
+                            0x6F70_5F34,
                             0x0000_0073,
                         ],
                     });
@@ -595,8 +595,8 @@ impl Op {
                 // invulnerability window
                 emit(PrimOp::SeqAt {
                     pos: 0x34c,
-                    expect: 0x1f8,
-                    words: &[0, 0x0020_0203, 0x01ff_0000, 0, 60],
+                    expect: 0x1F8,
+                    words: &[0, 0x0020_0203, 0x01FF_0000, 0, 60],
                 });
                 // boss movement restriction
                 emit(PrimOp::SeqAt {
@@ -604,12 +604,12 @@ impl Op {
                     expect: 0x202,
                     words: &[
                         0,
-                        0x002c_01f8,
-                        0x04ff_0000,
+                        0x002C_01F8,
+                        0x04FF_0000,
                         0,
                         0,
                         0x4300_0000,
-                        0x438c_0000,
+                        0x438C_0000,
                         0x4380_0000,
                     ],
                 });
@@ -741,8 +741,8 @@ const WARPS: &[Warp] = &[
             // invulnerability window
             Op::SeqAt {
                 pos: 0x384,
-                expect: 0x20f,
-                words: &[0, 0x001c_0203, 0x01ff_0000, 0, 60],
+                expect: 0x20F,
+                words: &[0, 0x001C_0203, 0x01FF_0000, 0, 60],
             },
         ],
     ),
@@ -901,8 +901,8 @@ const WARPS: &[Warp] = &[
             // invulnerability window
             Op::SeqAt {
                 pos: 0x2a4,
-                expect: 0x20f,
-                words: &[0, 0x001c_0203, 0x01ff_0000, 0, 60],
+                expect: 0x20F,
+                words: &[0, 0x001C_0203, 0x01FF_0000, 0, 60],
             },
         ],
     ),
@@ -1066,14 +1066,14 @@ const WARPS: &[Warp] = &[
             Op::BossEntry { stage: 4, skips: 2 },
             Op::Jump {
                 start: ST4_SPELL_START,
-                expect: 0x2a,
+                expect: 0x2A,
                 dest: 0x42b4,
                 at_frame: 1,
                 ecl_time: 0,
             },
             Op::Pos(0x42b4),
             Op::Seq {
-                words: &[1, 0x0014_0279, 0x01ff_0000, 0, 1],
+                words: &[1, 0x0014_0279, 0x01FF_0000, 0, 1],
             },
             Op::SpellFields {
                 base: ST4_SPELL,
@@ -1185,7 +1185,7 @@ const WARPS: &[Warp] = &[
             },
             Op::Jump {
                 start: 0x2b34,
-                expect: 0xb,
+                expect: 0xB,
                 dest: 0x2c40,
                 at_frame: 60,
                 ecl_time: 0,
@@ -1250,7 +1250,7 @@ const WARPS: &[Warp] = &[
             Op::BossEntry { stage: 6, skips: 2 },
             Op::Jump {
                 start: ST6_SPELL_START,
-                expect: 0x2a,
+                expect: 0x2A,
                 dest: ST6_EFFECT_BLOCK,
                 at_frame: 0,
                 ecl_time: 0,
@@ -1283,7 +1283,7 @@ const WARPS: &[Warp] = &[
             Op::BossEntry { stage: 6, skips: 2 },
             Op::Jump {
                 start: ST6_SPELL_START,
-                expect: 0x2a,
+                expect: 0x2A,
                 dest: ST6_EFFECT_BLOCK,
                 at_frame: 0,
                 ecl_time: 0,
@@ -1330,7 +1330,7 @@ const WARPS: &[Warp] = &[
             Op::BossEntry { stage: 6, skips: 2 },
             Op::Jump {
                 start: ST6_SPELL_START,
-                expect: 0x2a,
+                expect: 0x2A,
                 dest: ST6_EFFECT_BLOCK,
                 at_frame: 0,
                 ecl_time: 0,
@@ -1854,26 +1854,26 @@ const WARPS: &[Warp] = &[
                 words: &[
                     0,
                     0x0018_0132,
-                    0x02ff_0000,
+                    0x02FF_0000,
                     0,
                     0,
                     0, // 306
                     0,
-                    0x0014_01f6,
-                    0x01ff_0000,
+                    0x0014_01F6,
+                    0x01FF_0000,
                     0,
                     0x20, // flag
                     0,
-                    0x0014_01ff,
-                    0x01ff_0000,
+                    0x0014_01FF,
+                    0x01FF_0000,
                     0,
                     3000, // health
                     0,
-                    0x0020_000b,
-                    0x01ff_0000,
+                    0x0020_000B,
+                    0x01FF_0000,
                     0,
-                    0xc,
-                    0x7373_6f42,
+                    0xC,
+                    0x7373_6F42,
                     0x6472_6143,
                     0x39, // "BossCard9"
                 ],
@@ -1919,40 +1919,40 @@ const WARPS: &[Warp] = &[
                 expect: 0x16,
                 words: &[
                     5,
-                    0x0014_012e,
-                    0x01ff_0000,
+                    0x0014_012E,
+                    0x01FF_0000,
                     0,
                     5, // effect
                     5,
-                    0x0018_012f,
-                    0x02ff_0000,
+                    0x0018_012F,
+                    0x02FF_0000,
                     0,
                     3,
                     6,
                     5,
-                    0x0020_000f,
-                    0x01ff_0000,
+                    0x0020_000F,
+                    0x01FF_0000,
                     0,
-                    0xc,
-                    0x7373_6f42,
-                    0x6f70_5f34,
+                    0xC,
+                    0x7373_6F42,
+                    0x6F70_5F34,
                     0x0000_0073, // "Boss4_pos"
                     5,
-                    0x0014_012e,
-                    0x01ff_0000,
+                    0x0014_012E,
+                    0x01FF_0000,
                     0,
                     3,
                     5,
-                    0x0014_01ff,
-                    0x01ff_0000,
+                    0x0014_01FF,
+                    0x01FF_0000,
                     0,
                     7000, // health
                     6,
-                    0x0020_000b,
-                    0x01ff_0000,
+                    0x0020_000B,
+                    0x01FF_0000,
                     0,
-                    0xc,
-                    0x7373_6f42,
+                    0xC,
+                    0x7373_6F42,
                     0x6472_6143,
                     0x3031, // "BossCard10"
                 ],
@@ -1973,21 +1973,21 @@ const WARPS: &[Warp] = &[
             Op::I16 { at: 0x2b4, v: 0 },  // void 401
             Op::SeqAt {
                 pos: 0x3b4,
-                expect: 0xb,
+                expect: 0xB,
                 words: &[
                     5,
-                    0x0014_01ff,
-                    0x01ff_0000,
+                    0x0014_01FF,
+                    0x01FF_0000,
                     0,
                     7000, // health
                     5,
                     0x0014_0203,
-                    0x01ff_0000,
+                    0x01FF_0000,
                     0,
                     14, // invulnerability
                     9999,
                     0x0010_0000,
-                    0x00ff_0000,
+                    0x00FF_0000,
                     0, // stall
                 ],
             },
@@ -2007,7 +2007,7 @@ fn st5_mid1_ops(phase: Phase, emit: &mut Emit<'_>) {
         });
         emit(PrimOp::Jump {
             start: ST5_WAVE_SRC,
-            expect: 0x20c,
+            expect: 0x20C,
             dest: ST5_WAVE_DESTS[wave as usize - 1],
             at_frame: 0,
             ecl_time: 0,
@@ -2022,7 +2022,7 @@ fn st5_mid1_ops(phase: Phase, emit: &mut Emit<'_>) {
         });
         emit(PrimOp::Jump {
             start: 0x6ed8,
-            expect: 0xb,
+            expect: 0xB,
             dest: 0x7074,
             at_frame: 0,
             ecl_time: 0,
@@ -2058,7 +2058,7 @@ fn st7_s9_ops(phase: Phase, emit: &mut Emit<'_>) {
             });
             emit(PrimOp::Jump {
                 start: S9_TR_START,
-                expect: 0x12c,
+                expect: 0x12C,
                 dest: 0x10a50,
                 at_frame: 0,
                 ecl_time: 0,
@@ -2071,7 +2071,7 @@ fn st7_s9_ops(phase: Phase, emit: &mut Emit<'_>) {
             });
             emit(PrimOp::Jump {
                 start: S9_TR_START,
-                expect: 0x12c,
+                expect: 0x12C,
                 dest: 0x10c7c,
                 at_frame: 0,
                 ecl_time: 0,
@@ -2087,7 +2087,7 @@ fn st7_s10_ops(phase: Phase, emit: &mut Emit<'_>) {
             emit(PrimOp::File(3));
             emit(PrimOp::Jump {
                 start: ST7_S10_HECATIA_AT[0],
-                expect: 0xb,
+                expect: 0xB,
                 dest: ST7_S10_HECATIA_AT[hecatia],
                 at_frame: ST7_S10_HECATIA_AT_FRAME,
                 ecl_time: 0,
@@ -2097,7 +2097,7 @@ fn st7_s10_ops(phase: Phase, emit: &mut Emit<'_>) {
             emit(PrimOp::File(4));
             emit(PrimOp::Jump {
                 start: ST7_S10_JUNKO_AT[0],
-                expect: 0xb,
+                expect: 0xB,
                 dest: ST7_S10_JUNKO_AT[junko],
                 at_frame: ST7_S10_JUNKO_AT_FRAME,
                 ecl_time: 0,
@@ -2123,15 +2123,15 @@ const ST7_HIDE_SUBBOSS: &[Op] = &[
         expect: 0x191,
         words: &[
             0,
-            0x0010_01f9,
-            0x00ff_0000,
+            0x0010_01F9,
+            0x00FF_0000,
             0,
             0,
             0x0034_0190,
-            0x02ff_0000,
+            0x02FF_0000,
             0,
             0x4340_0000,
-            0xc280_0000,
+            0xC280_0000,
         ],
     },
 ];
@@ -2181,46 +2181,46 @@ impl ChapterWarp {
 
 #[rustfmt::skip]
 const CHAPTER_WARPS: &[(u32, u32, ChapterWarp)] = &[
-    (1, 2, ChapterWarp::new(0x7494, 90).sub(0x3f4c, 0xb, 0x3fa8)),
+    (1, 2, ChapterWarp::new(0x7494, 90).sub(0x3f4c, 0xB, 0x3fa8)),
     (1, 3, ChapterWarp::new(0x7544, 90).effect(ChapterEffect::SetChapter(2))),
-    (1, 4, ChapterWarp::new(0x7544, 90).sub(0x4098, 0xf, 0x40fc)),
+    (1, 4, ChapterWarp::new(0x7544, 90).sub(0x4098, 0xF, 0x40fc)),
     (1, 5, ChapterWarp::new(0x75f8, 90).effect(ChapterEffect::SetChapter(5))),
-    (1, 6, ChapterWarp::new(0x75f8, 90).sub(0x4150, 0xf, 0x41b8)),
-    (2, 2, ChapterWarp::new(0x76ec, 90).sub(0x42b4, 0xb, 0x4354)),
-    (2, 3, ChapterWarp::new(0x76ec, 90).sub(0x42b4, 0xb, 0x43d4)),
+    (1, 6, ChapterWarp::new(0x75f8, 90).sub(0x4150, 0xF, 0x41b8)),
+    (2, 2, ChapterWarp::new(0x76ec, 90).sub(0x42b4, 0xB, 0x4354)),
+    (2, 3, ChapterWarp::new(0x76ec, 90).sub(0x42b4, 0xB, 0x43d4)),
     (2, 4, ChapterWarp::new(0x778c, 29).effect(ChapterEffect::SetChapter(4))),
-    (2, 5, ChapterWarp::new(0x778c, 0).sub(0x443c, 0xf, 0x448c)),
-    (2, 6, ChapterWarp::new(0x778c, 90).sub(0x443c, 0xf, 0x450c)),
-    (3, 2, ChapterWarp::new(0xa4cc, 90).sub(0x5b6c, 0xb, 0x5c00)),
-    (3, 3, ChapterWarp::new(0xa4cc, 30).sub(0x5b6c, 0xb, 0x5c6c)),
+    (2, 5, ChapterWarp::new(0x778c, 0).sub(0x443c, 0xF, 0x448c)),
+    (2, 6, ChapterWarp::new(0x778c, 90).sub(0x443c, 0xF, 0x450c)),
+    (3, 2, ChapterWarp::new(0xa4cc, 90).sub(0x5b6c, 0xB, 0x5c00)),
+    (3, 3, ChapterWarp::new(0xa4cc, 30).sub(0x5b6c, 0xB, 0x5c6c)),
     (3, 4, ChapterWarp::new(0xa56c, 50).effect(ChapterEffect::SetChapter(4))),
-    (3, 5, ChapterWarp::new(0xa56c, 20).sub(0x5d0c, 0xf, 0x5d70)),
-    (3, 6, ChapterWarp::new(0xa56c, 90).sub(0x5d0c, 0xf, 0x5df0)),
-    (4, 2, ChapterWarp::new(0x8880, 90).sub(0x406c, 0xb, 0x40ec)),
-    (4, 3, ChapterWarp::new(0x8880, 90).sub(0x406c, 0xb, 0x4158).effect(ChapterEffect::ZeroI32(0x5cc4))),
+    (3, 5, ChapterWarp::new(0xa56c, 20).sub(0x5d0c, 0xF, 0x5d70)),
+    (3, 6, ChapterWarp::new(0xa56c, 90).sub(0x5d0c, 0xF, 0x5df0)),
+    (4, 2, ChapterWarp::new(0x8880, 90).sub(0x406c, 0xB, 0x40ec)),
+    (4, 3, ChapterWarp::new(0x8880, 90).sub(0x406c, 0xB, 0x4158).effect(ChapterEffect::ZeroI32(0x5cc4))),
     (4, 4, ChapterWarp::new(0x8930, 90).effect(ChapterEffect::ZeroI32(0x6bc0))),
-    (4, 5, ChapterWarp::new(0x8930, 90).sub(0x41e0, 0xf, 0x4244).effect(ChapterEffect::ZeroI32(0x6e74))),
-    (4, 6, ChapterWarp::new(0x8930, 90).sub(0x41e0, 0xf, 0x42c4)),
-    (5, 2, ChapterWarp::new(0xa180, 90).sub(0x6ed8, 0xb, 0x6f58)),
-    (5, 3, ChapterWarp::new(0xa180, 90).sub(0x6ed8, 0xb, 0x7040).effect(ChapterEffect::ZeroI32(0x7ba0))),
-    (5, 4, ChapterWarp::new(0xa180, 90).sub(0x6ed8, 0xb, 0x7098)),
+    (4, 5, ChapterWarp::new(0x8930, 90).sub(0x41e0, 0xF, 0x4244).effect(ChapterEffect::ZeroI32(0x6e74))),
+    (4, 6, ChapterWarp::new(0x8930, 90).sub(0x41e0, 0xF, 0x42c4)),
+    (5, 2, ChapterWarp::new(0xa180, 90).sub(0x6ed8, 0xB, 0x6f58)),
+    (5, 3, ChapterWarp::new(0xa180, 90).sub(0x6ed8, 0xB, 0x7040).effect(ChapterEffect::ZeroI32(0x7ba0))),
+    (5, 4, ChapterWarp::new(0xa180, 90).sub(0x6ed8, 0xB, 0x7098)),
     (5, 5, ChapterWarp::new(0xa1a0, 90).effect(ChapterEffect::ZeroI16(0x70f0))),
-    (5, 6, ChapterWarp::new(0xa1a0, 90).sub(ST5_WAVE_SRC, 0x20c, ST5_WAVE_DESTS[1]).effect(ChapterEffect::ZeroI32(0x81c0))),
-    (5, 7, ChapterWarp::new(0xa1a0, 90).sub(ST5_WAVE_SRC, 0x20c, ST5_WAVE_DESTS[2]).effect(ChapterEffect::ZeroI32(0x845c))),
-    (5, 8, ChapterWarp::new(0xa1a0, 90).sub(ST5_WAVE_SRC, 0x20c, ST5_WAVE_DESTS[3]).effect(ChapterEffect::ZeroI32(0x87e0))),
-    (5, 9, ChapterWarp::new(0xa1a0, 90).sub(ST5_WAVE_SRC, 0x20c, ST5_WAVE_DESTS[4]).effect(ChapterEffect::ZeroI32(0x8ce8))),
-    (5, 10, ChapterWarp::new(0xa1a0, 90).sub(ST5_WAVE_SRC, 0x20c, ST5_WAVE_DESTS[5]).effect(ChapterEffect::ZeroI32(0x9a50))),
-    (6, 2, ChapterWarp::new(0x93e0, 90).sub(0x2b34, 0xb, 0x2be8).effect(ChapterEffect::ZeroI32(0x38d0))),
-    (6, 3, ChapterWarp::new(0x93e0, 90).sub(0x2b34, 0xb, 0x2c68).effect(ChapterEffect::ZeroI32(0x40ac))),
-    (6, 4, ChapterWarp::new(0x93e0, 90).sub(0x2b34, 0xb, 0x2ce8).effect(ChapterEffect::ZeroI32(0x43b0))),
-    (7, 2, ChapterWarp::new(0x9208, 90).sub(0x5d08, 0xb, 0x5d88)),
-    (7, 3, ChapterWarp::new(0x9208, 90).sub(0x5d08, 0xb, 0x5e08)),
-    (7, 4, ChapterWarp::new(0x9208, 90).sub(0x5d08, 0xb, 0x5e9c)),
-    (7, 5, ChapterWarp::new(0x9208, 90).sub(0x5d08, 0xb, 0x5f30)),
+    (5, 6, ChapterWarp::new(0xa1a0, 90).sub(ST5_WAVE_SRC, 0x20C, ST5_WAVE_DESTS[1]).effect(ChapterEffect::ZeroI32(0x81c0))),
+    (5, 7, ChapterWarp::new(0xa1a0, 90).sub(ST5_WAVE_SRC, 0x20C, ST5_WAVE_DESTS[2]).effect(ChapterEffect::ZeroI32(0x845c))),
+    (5, 8, ChapterWarp::new(0xa1a0, 90).sub(ST5_WAVE_SRC, 0x20C, ST5_WAVE_DESTS[3]).effect(ChapterEffect::ZeroI32(0x87e0))),
+    (5, 9, ChapterWarp::new(0xa1a0, 90).sub(ST5_WAVE_SRC, 0x20C, ST5_WAVE_DESTS[4]).effect(ChapterEffect::ZeroI32(0x8ce8))),
+    (5, 10, ChapterWarp::new(0xa1a0, 90).sub(ST5_WAVE_SRC, 0x20C, ST5_WAVE_DESTS[5]).effect(ChapterEffect::ZeroI32(0x9a50))),
+    (6, 2, ChapterWarp::new(0x93e0, 90).sub(0x2b34, 0xB, 0x2be8).effect(ChapterEffect::ZeroI32(0x38d0))),
+    (6, 3, ChapterWarp::new(0x93e0, 90).sub(0x2b34, 0xB, 0x2c68).effect(ChapterEffect::ZeroI32(0x40ac))),
+    (6, 4, ChapterWarp::new(0x93e0, 90).sub(0x2b34, 0xB, 0x2ce8).effect(ChapterEffect::ZeroI32(0x43b0))),
+    (7, 2, ChapterWarp::new(0x9208, 90).sub(0x5d08, 0xB, 0x5d88)),
+    (7, 3, ChapterWarp::new(0x9208, 90).sub(0x5d08, 0xB, 0x5e08)),
+    (7, 4, ChapterWarp::new(0x9208, 90).sub(0x5d08, 0xB, 0x5e9c)),
+    (7, 5, ChapterWarp::new(0x9208, 90).sub(0x5d08, 0xB, 0x5f30)),
     (7, 6, ChapterWarp::new(0x9338, 90)),
-    (7, 7, ChapterWarp::new(0x9338, 10).sub(0x5f84, 0xb, 0x6018)),
-    (7, 8, ChapterWarp::new(0x9338, 90).sub(0x5f84, 0xb, 0x60c0)),
-    (7, 9, ChapterWarp::new(0x9338, 90).sub(0x5f84, 0xb, 0x6154)),
+    (7, 7, ChapterWarp::new(0x9338, 10).sub(0x5f84, 0xB, 0x6018)),
+    (7, 8, ChapterWarp::new(0x9338, 90).sub(0x5f84, 0xB, 0x60c0)),
+    (7, 9, ChapterWarp::new(0x9338, 90).sub(0x5f84, 0xB, 0x6154)),
 ];
 
 /// What a `(stage, portion)` pair dispatches to.
@@ -2260,7 +2260,7 @@ fn expand_chapter(stage: u32, portion: u32, emit: &mut Emit<'_>) -> bool {
     // Every `CHAPTER_STARTS` offset holds an id-0x2a instruction.
     emit(PrimOp::Jump {
         start: CHAPTER_STARTS[stage as usize - 1],
-        expect: 0x2a,
+        expect: 0x2A,
         dest: row.dest,
         at_frame: 60,
         ecl_time: row.time,
