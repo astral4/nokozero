@@ -4,7 +4,7 @@
 #![expect(trivial_casts, clippy::inline_always, clippy::ref_as_ptr)]
 
 use super::backing::Backing;
-use super::out::{get_zeroed, get_zeroed_array};
+use super::out::{get_zeroed, get_zeroed_array, put};
 use crate::iat::{ImportRef, hook_import};
 use std::cmp::max;
 use std::ffi::c_void;
@@ -132,6 +132,31 @@ fn surface_bytes(pitch: u32, height: u32) -> usize {
     }
 }
 
+/// Writes the `D3DLOCKED_RECT` for a lock of `backing` to `out`.
+///
+/// # Safety
+///
+/// `prect` must be null or point to a readable `RECT`. `out` must be null or point to a writable `D3DLOCKED_RECT`.
+unsafe fn write_locked_rect(
+    backing: &Backing,
+    width: u32,
+    format: D3DFORMAT,
+    prect: *const RECT,
+    out: *mut D3DLOCKED_RECT,
+) -> Result<()> {
+    let pitch = row_pitch(width, format);
+    let bits = unsafe { locked_bits(backing, pitch, format, prect) };
+    unsafe {
+        write_out(
+            out,
+            D3DLOCKED_RECT {
+                Pitch: pitch.cast_signed(),
+                pBits: bits.cast(),
+            },
+        )
+    }
+}
+
 /// Returns the `pBits` to be reported by `LockRect`.
 ///
 /// # Safety
@@ -242,9 +267,6 @@ impl IDirect3D9_Impl for FakeD3d9_Impl {
         _flags: u32,
         pidentifier: *mut D3DADAPTER_IDENTIFIER9,
     ) -> Result<()> {
-        if pidentifier.is_null() {
-            return Err(Error::from_hresult(D3DERR_INVALIDCALL));
-        }
         let mut id = D3DADAPTER_IDENTIFIER9::default();
         for (dst, &b) in zip(&mut id.Driver, b"nokozero") {
             *dst = b.cast_signed();
@@ -252,8 +274,7 @@ impl IDirect3D9_Impl for FakeD3d9_Impl {
         for (dst, &b) in zip(&mut id.Description, b"nokozero null device") {
             *dst = b.cast_signed();
         }
-        unsafe { pidentifier.write(id) };
-        Ok(())
+        unsafe { write_out(pidentifier, id) }
     }
 
     fn GetAdapterModeCount(&self, _adapter: u32, _format: D3DFORMAT) -> u32 {
@@ -306,10 +327,7 @@ impl IDirect3D9_Impl for FakeD3d9_Impl {
         _multisampletype: D3DMULTISAMPLE_TYPE,
         pqualitylevels: *mut u32,
     ) -> Result<()> {
-        if !pqualitylevels.is_null() {
-            unsafe { pqualitylevels.write(1) };
-        }
-        Ok(())
+        unsafe { put(pqualitylevels, 1) }
     }
 
     fn CheckDepthStencilMatch(
@@ -391,6 +409,14 @@ struct FakeDevice {
     back_buffer_backing: Arc<Backing>,
     /// Storage for `GetDepthStencilSurface`.
     depth_backing: Arc<Backing>,
+}
+
+impl FakeDevice_Impl {
+    /// Builds a surface COM object sharing `backing` sized to the back buffer.
+    fn shared_surface(&self, backing: &Arc<Backing>, format: D3DFORMAT) -> IDirect3DSurface9 {
+        let (width, height, _) = self.back_buffer;
+        FakeSurface::from_shared(self.to_interface(), backing.clone(), width, height, format).into()
+    }
 }
 
 impl IDirect3DDevice9_Impl for FakeDevice_Impl {
@@ -489,9 +515,7 @@ impl IDirect3DDevice9_Impl for FakeDevice_Impl {
         _ibackbuffer: u32,
         _type: D3DBACKBUFFER_TYPE,
     ) -> Result<IDirect3DSurface9> {
-        let device = self.to_interface();
-        let (w, h, fmt) = self.back_buffer;
-        Ok(FakeSurface::from_shared(device, self.back_buffer_backing.clone(), w, h, fmt).into())
+        Ok(self.shared_surface(&self.back_buffer_backing, self.back_buffer.2))
     }
 
     fn GetRasterStatus(&self, _iswapchain: u32, _prs: *mut D3DRASTER_STATUS) -> Result<()> {
@@ -692,9 +716,7 @@ impl IDirect3DDevice9_Impl for FakeDevice_Impl {
     }
 
     fn GetRenderTarget(&self, _rtindex: u32) -> Result<IDirect3DSurface9> {
-        let device = self.to_interface();
-        let (w, h, fmt) = self.back_buffer;
-        Ok(FakeSurface::from_shared(device, self.back_buffer_backing.clone(), w, h, fmt).into())
+        Ok(self.shared_surface(&self.back_buffer_backing, self.back_buffer.2))
     }
 
     fn SetDepthStencilSurface(&self, _pz: Ref<'_, IDirect3DSurface9>) -> Result<()> {
@@ -702,9 +724,7 @@ impl IDirect3DDevice9_Impl for FakeDevice_Impl {
     }
 
     fn GetDepthStencilSurface(&self) -> Result<IDirect3DSurface9> {
-        let device = self.to_interface();
-        let (w, h, _) = self.back_buffer;
-        Ok(FakeSurface::from_shared(device, self.depth_backing.clone(), w, h, D3DFMT_D24S8).into())
+        Ok(self.shared_surface(&self.depth_backing, D3DFMT_D24S8))
     }
 
     fn BeginScene(&self) -> Result<()> {
@@ -740,10 +760,7 @@ impl IDirect3DDevice9_Impl for FakeDevice_Impl {
             M41: 0., M42: 0., M43: 0., M44: 1.,
         };
 
-        if !pmatrix.is_null() {
-            unsafe { pmatrix.write(IDENTITY) };
-        }
-        Ok(())
+        unsafe { put(pmatrix, IDENTITY) }
     }
 
     fn MultiplyTransform(&self, _s: D3DTRANSFORMSTATETYPE, _m: *const Matrix4x4) -> Result<()> {
@@ -858,10 +875,7 @@ impl IDirect3DDevice9_Impl for FakeDevice_Impl {
     }
 
     fn ValidateDevice(&self, pnumpasses: *mut u32) -> Result<()> {
-        if !pnumpasses.is_null() {
-            unsafe { pnumpasses.write(1) };
-        }
-        Ok(())
+        unsafe { put(pnumpasses, 1) }
     }
 
     fn SetPaletteEntries(&self, _n: u32, _pe: *const PALETTEENTRY) -> Result<()> {
@@ -1040,10 +1054,7 @@ impl IDirect3DDevice9_Impl for FakeDevice_Impl {
     }
 
     fn GetStreamSourceFreq(&self, _n: u32, psetting: *mut u32) -> Result<()> {
-        if !psetting.is_null() {
-            unsafe { psetting.write(1) };
-        }
-        Ok(())
+        unsafe { put(psetting, 1) }
     }
 
     fn SetIndices(&self, _pindexdata: Ref<'_, IDirect3DIndexBuffer9>) -> Result<()> {
@@ -1298,13 +1309,7 @@ impl IDirect3DSurface9_Impl for FakeSurface_Impl {
         prect: *const RECT,
         _flags: u32,
     ) -> Result<()> {
-        let pitch = row_pitch(self.width, self.format);
-        let bits = unsafe { locked_bits(&self.backing, pitch, self.format, prect) };
-        let locked = D3DLOCKED_RECT {
-            Pitch: pitch.cast_signed(),
-            pBits: bits.cast(),
-        };
-        unsafe { write_out(plockedrect, locked) }
+        unsafe { write_locked_rect(&self.backing, self.width, self.format, prect, plockedrect) }
     }
 
     fn UnlockRect(&self) -> Result<()> {
@@ -1426,13 +1431,7 @@ impl IDirect3DTexture9_Impl for FakeTexture_Impl {
         let Some(lvl) = self.levels.get(level as usize) else {
             return Err(Error::from_hresult(D3DERR_INVALIDCALL));
         };
-        let pitch = row_pitch(lvl.width, self.format);
-        let bits = unsafe { locked_bits(&lvl.backing, pitch, self.format, prect) };
-        let locked = D3DLOCKED_RECT {
-            Pitch: pitch.cast_signed(),
-            pBits: bits.cast(),
-        };
-        unsafe { write_out(plockedrect, locked) }
+        unsafe { write_locked_rect(&lvl.backing, lvl.width, self.format, prect, plockedrect) }
     }
 
     fn UnlockRect(&self, _level: u32) -> Result<()> {

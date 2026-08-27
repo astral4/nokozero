@@ -4,7 +4,7 @@
 #![expect(trivial_casts, clippy::inline_always, clippy::ref_as_ptr)]
 
 use super::backing::Backing;
-use super::out::{get_zeroed, get_zeroed_array};
+use super::out::{get_zeroed, get_zeroed_array, put};
 use crate::iat::{ImportRef, hook_import};
 use std::cmp::min;
 use std::convert::identity;
@@ -190,11 +190,9 @@ impl IDirectSoundBuffer_Impl for FakeSoundBuffer_Impl {
                 Some((cursor + BYTES_PER_TICK) % len)
             })
             .unwrap_or_else(identity); // the closure never returns `None`
-        if !pdwcurrentplaycursor.is_null() {
-            unsafe { pdwcurrentplaycursor.write(play) };
-        }
-        if !pdwcurrentwritecursor.is_null() {
-            unsafe { pdwcurrentwritecursor.write((play + BYTES_PER_TICK) % len) };
+        unsafe {
+            put(pdwcurrentplaycursor, play).unwrap();
+            put(pdwcurrentwritecursor, (play + BYTES_PER_TICK) % len).unwrap();
         }
         Ok(())
     }
@@ -220,10 +218,8 @@ impl IDirectSoundBuffer_Impl for FakeSoundBuffer_Impl {
             }
         }
         #[expect(clippy::cast_possible_truncation)]
-        if !pdwsizewritten.is_null() {
-            unsafe { pdwsizewritten.write(size_of::<WAVEFORMATEX>() as u32) };
-        }
-        Ok(())
+        let size = size_of::<WAVEFORMATEX>() as u32;
+        unsafe { put(pdwsizewritten, size) }
     }
 
     fn GetVolume(&self) -> Result<i32> {
@@ -269,9 +265,7 @@ impl IDirectSoundBuffer_Impl for FakeSoundBuffer_Impl {
                 ppvaudioptr1.write(self.backing.ptr_at(offset as usize, first as usize).cast());
             }
         }
-        if !pdwaudiobytes1.is_null() {
-            unsafe { pdwaudiobytes1.write(first) };
-        }
+        unsafe { put(pdwaudiobytes1, first) }.unwrap();
         if !ppvaudioptr2.is_null() {
             let ptr = if second > 0 {
                 self.backing.ptr_at(0, second as usize).cast()
@@ -280,9 +274,7 @@ impl IDirectSoundBuffer_Impl for FakeSoundBuffer_Impl {
             };
             unsafe { ppvaudioptr2.write(ptr) };
         }
-        if !pdwaudiobytes2.is_null() {
-            unsafe { pdwaudiobytes2.write(second) };
-        }
+        unsafe { put(pdwaudiobytes2, second) }.unwrap();
         Ok(())
     }
 

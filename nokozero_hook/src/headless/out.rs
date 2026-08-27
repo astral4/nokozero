@@ -19,3 +19,16 @@ pub(super) unsafe fn get_zeroed_array<T>(out: *mut T, count: usize) -> Result<()
     }
     Ok(())
 }
+
+/// Writes `value` if `out` is non-null.
+///
+/// # Safety
+///
+/// `out` must be null or point to a writable `T`.
+#[expect(clippy::unnecessary_wraps)]
+pub(super) unsafe fn put<T>(out: *mut T, value: T) -> Result<()> {
+    if !out.is_null() {
+        unsafe { out.write(value) };
+    }
+    Ok(())
+}
