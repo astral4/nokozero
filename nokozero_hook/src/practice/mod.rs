@@ -12,10 +12,10 @@ pub(crate) use crate::practice::load::{Generation, load_generation};
 pub(crate) use crate::practice::machine::Outcome;
 
 use crate::practice::catalog::apply_section;
-use crate::practice::data::section_stage;
+use crate::practice::data::{EXTRA_DIFFICULTY, rank_matches_stage, section_mapped, section_stage};
 use crate::practice::ecl::{Ecl, EclUndo};
-use crate::practice::load::HANDOFF;
-use crate::practice::machine::{Lifecycle, ReloadPlan};
+use crate::practice::load::{HANDOFF, LoadStatus};
+use crate::practice::machine::{Lifecycle, ReloadPlan, TickDecision};
 
 use crate::addrs::{
     BOMB_FRAGMENTS_VA, BOMBS_VA, CHARACTER_VA, DIFFICULTY_VA, GAMEMODE_INGAME, GAMEMODE_RETRY,
@@ -34,16 +34,16 @@ use std::ptr::with_exposed_provenance;
 
 #[derive(Clone, Copy)]
 pub(crate) struct PracticeParams {
-    /// Whether to warp/inject at the next stage load.
+    /// Whether to warp to `section` and `phase` at the next stage load.
     active: bool,
-    /// The warp target ID; see the section ID constants.
+    /// The warp target ID; see the section ID constants. Read only when `active`.
     section: u32,
-    /// The sub-phase within the section.
+    /// The sub-phase within the section. Read only when `active`.
     phase: u32,
-    /// The difficulty (0-4) applied at the next reset. Negative = leave as-is.
-    difficulty: i32,
-    /// The character (0–3) applied at the next reset. Negative = leave as-is.
-    character: i32,
+    /// The difficulty (0-4) applied at the reset. 4 = Extra.
+    difficulty: u32,
+    /// The character (0-3) applied at the reset.
+    character: u32,
     score: i64,
     graze: i32,
     value: i32,
@@ -54,9 +54,6 @@ pub(crate) struct PracticeParams {
     bomb_fragments: i32,
 }
 
-/// The RESET params block. Its resource run is in the same order as the observation meta
-/// block's (`features::put_meta`), so a value read off an observation replays into the
-/// field of the same name.
 #[repr(C)]
 struct WireParams {
     section: u32,
@@ -78,52 +75,65 @@ pub(crate) const PARAMS_LEN: usize = size_of::<WireParams>();
 
 const _: () = assert!(PARAMS_LEN == 56, "wire params block is fixed at 56 bytes");
 
-/// Validates and decodes a RESET command's params block. Returns `None` if there is a protocol violation.
-pub(crate) fn parse_params(payload: &[u8]) -> Option<PracticeParams> {
-    if payload.len() != size_of::<WireParams>() {
-        return None;
-    }
-    // SAFETY: The length check guarantees `size_of::<WireParams>()` readable bytes.
-    // `WireParams` has only integer fields, so every bit pattern is valid. `read_unaligned` tolerates the buffer's alignment.
-    let wire = unsafe { payload.as_ptr().cast::<WireParams>().read_unaligned() };
+impl PracticeParams {
+    /// Validates and decodes a RESET command's params block. Returns `None` if there is a protocol violation.
+    pub(crate) fn parse(payload: &[u8]) -> Option<Self> {
+        if payload.len() != size_of::<WireParams>() {
+            return None;
+        }
+        // SAFETY: The length check guarantees `size_of::<WireParams>()` readable bytes.
+        // `WireParams` has only integer fields, so every bit pattern is valid. `read_unaligned` tolerates the buffer's alignment.
+        let wire = unsafe { payload.as_ptr().cast::<WireParams>().read_unaligned() };
 
-    if wire.difficulty > 4 || wire.character > 3 {
-        return None;
-    }
-    if wire.active != 0 && section_stage(wire.section).is_none() {
-        return None;
-    }
-    if wire.active != 0 && (section_stage(wire.section) == Some(7)) != (wire.difficulty == 4) {
-        return None;
-    }
+        let (Ok(difficulty), Ok(character)) = (
+            u32::try_from(wire.difficulty),
+            u32::try_from(wire.character),
+        ) else {
+            return None;
+        };
+        if difficulty > EXTRA_DIFFICULTY || character > 3 {
+            return None;
+        }
 
-    let score = wire.score.clamp(0, 9_999_999_990);
-    let graze = wire.graze.clamp(0, 999_999);
-    let value = wire.value.clamp(0, 999_990);
-    let power = wire.power.clamp(0, 400);
-    let lives = wire.lives.clamp(0, 8);
-    // 5 fragments per life in Extra; 3 fragments per life elsewhere
-    let life_fragments = wire
-        .life_fragments
-        .clamp(0, if wire.difficulty == 4 { 5 } else { 3 });
-    let bombs = wire.bombs.clamp(0, 8);
-    let bomb_fragments = wire.bomb_fragments.clamp(0, 4);
+        let active = wire.active != 0;
+        if active {
+            let stage = section_stage(wire.section)?;
+            if !rank_matches_stage(stage, difficulty) {
+                return None;
+            }
+            if !section_mapped(wire.section, wire.phase) {
+                return None;
+            }
+        }
 
-    Some(PracticeParams {
-        active: wire.active != 0,
-        section: wire.section,
-        phase: wire.phase,
-        difficulty: wire.difficulty,
-        character: wire.character,
-        score,
-        graze,
-        value,
-        power,
-        lives,
-        life_fragments,
-        bombs,
-        bomb_fragments,
-    })
+        let score = wire.score.clamp(0, 9_999_999_990);
+        let graze = wire.graze.clamp(0, 999_999);
+        let value = wire.value.clamp(0, 999_990);
+        let power = wire.power.clamp(0, 400);
+        let lives = wire.lives.clamp(0, 8);
+        // 5 fragments per life in Extra; 3 fragments per life elsewhere
+        let life_fragments = wire
+            .life_fragments
+            .clamp(0, if difficulty == EXTRA_DIFFICULTY { 5 } else { 3 });
+        let bombs = wire.bombs.clamp(0, 8);
+        let bomb_fragments = wire.bomb_fragments.clamp(0, 4);
+
+        Some(Self {
+            active,
+            section: wire.section,
+            phase: wire.phase,
+            difficulty,
+            character,
+            score,
+            graze,
+            value,
+            power,
+            lives,
+            life_fragments,
+            bombs,
+            bomb_fragments,
+        })
+    }
 }
 
 struct LiveWarp {
@@ -132,8 +142,7 @@ struct LiveWarp {
     undo: EclUndo,
 }
 
-/// The value is `None` while the value is checked out (i.e. inside one of the transition
-/// wrappers below, or between [`ConsumeGrant::begin`] and [`ConsumeGrant::finish`]).
+/// The value is `None` while the value is checked out (i.e. inside one of the transition wrappers below or [`on_gt_tick`]).
 static LIFECYCLE: MainCell<Option<Lifecycle>> = MainCell::new(Some(Lifecycle::INIT));
 
 /// Takes the lifecycle out of its cell, aborting if it is already checked out.
@@ -151,7 +160,7 @@ fn put_lifecycle(thread: MainThread, lc: Lifecycle) {
     LIFECYCLE.set(thread, Some(lc));
 }
 
-/// Accepts a decoded RESET command. Returns `false` if a reset is already in flight.
+/// Accepts a decoded RESET command. Returns `false` if a reset is already pending.
 #[must_use]
 pub(crate) fn accept_reset(thread: MainThread, seq: u32, params: PracticeParams) -> bool {
     let mut lc = take_lifecycle(thread);
@@ -160,28 +169,16 @@ pub(crate) fn accept_reset(thread: MainThread, seq: u32, params: PracticeParams)
     accepted
 }
 
-/// Observes one supervisor frame for the load counter and "loader running" flag.
-fn observe(thread: MainThread, generation: Generation, loader_running: bool) {
-    let mut lc = take_lifecycle(thread);
-    lc.observe(generation, loader_running);
-    put_lifecycle(thread, lc);
-}
-
 /// Attempts `Requested` -> `Reloading`, returning the writes for the caller to perform.
-/// Returns `None` if the state should stay `Requested`.
+/// Returns `None` if the state should stay `Requested` or the reset was refused.
 fn try_start_reload(thread: MainThread, stable_ingame: bool) -> Option<ReloadPlan> {
+    let status = HANDOFF.status();
+    let loader_running = unsafe { read::<u32>(LOADER_RUNNING_VA) } == 1;
+    let current_stage = unsafe { read::<u32>(STAGE_CURRENT_VA) };
     let mut lc = take_lifecycle(thread);
-    let plan = lc.try_start_reload(stable_ingame);
+    let plan = lc.try_start_reload(stable_ingame, status, loader_running, current_stage);
     put_lifecycle(thread, lc);
     plan
-}
-
-/// Returns whether the tick guard should be holding ticks back.
-fn reset_reloading(thread: MainThread) -> bool {
-    let lc = take_lifecycle(thread);
-    let reloading = lc.reset_reloading();
-    put_lifecycle(thread, lc);
-    reloading
 }
 
 /// Returns the wire values `(load_generation, reset_seq, reset_outcome, applied_section)`.
@@ -190,42 +187,6 @@ fn wire(thread: MainThread) -> (Generation, u32, Outcome, u32) {
     let tuple = lc.wire();
     put_lifecycle(thread, lc);
     tuple
-}
-
-/// Guard for exclusive checkout of the lifecycle across ECL patch application/reversal and resource writes.
-#[must_use]
-struct ConsumeGrant {
-    lc: Lifecycle,
-}
-
-impl ConsumeGrant {
-    /// Checks the lifecycle out for the guard's consuming tick, taking the value out of [`LIFECYCLE`].
-    /// Aborts if the reset state isn't `Reloading`.
-    fn begin(thread: MainThread) -> Self {
-        let lc = take_lifecycle(thread);
-        if !lc.reset_reloading() {
-            eprintln!("nokozero_hook: practice: consume began without a reload in progress");
-            abort();
-        }
-        Self { lc }
-    }
-
-    /// Returns the in-progress reset's warp params. `None` means vanilla behavior.
-    fn params(&self) -> Option<PracticeParams> {
-        self.lc.reloading_params()
-    }
-
-    /// Returns the live warp's undo slot for [`revert_previous_warp`] and [`apply_managed_warp`] to operate on in place.
-    fn last_warp(&mut self) -> &mut Option<LiveWarp> {
-        self.lc.last_warp_mut()
-    }
-
-    /// Puts the lifecycle value back into [`LIFECYCLE`] with the indicated `generation`, `outcome`, and `section` applied.
-    fn finish(self, thread: MainThread, generation: Generation, outcome: Outcome, section: u32) {
-        let mut lc = self.lc;
-        lc.finish_managed(generation, outcome, section);
-        put_lifecycle(thread, lc);
-    }
 }
 
 pub(crate) struct WireMeta {
@@ -287,41 +248,43 @@ unsafe extern "C" fn gt_tick_trampoline() -> ! {
     )
 }
 
-/// Returns whether the guard is holding this tick back. The guard only holds while a reset's reload is in progress.
+/// Returns whether the guard is holding this tick back.
 extern "C" fn on_gt_tick() -> u32 {
     let thread = MainThread::current();
+    let status = HANDOFF.status();
+    let mut lc = take_lifecycle(thread);
+    let run = guard_tick(thread, &mut lc, status);
+    put_lifecycle(thread, lc);
+    if run { RUN_TICK } else { SKIP_TICK }
+}
 
-    if !reset_reloading(thread) {
-        return RUN_TICK;
-    }
-
-    let gui = unsafe { read::<u32>(GUI_PTR_VA) };
-    if gui == 0 {
-        return SKIP_TICK;
-    }
-
-    let Some((generation, managed)) = HANDOFF.consume() else {
-        return SKIP_TICK;
+fn guard_tick(thread: MainThread, lc: &mut Lifecycle, status: LoadStatus) -> bool {
+    let (params, generation) = match lc.tick_decision(status) {
+        TickDecision::Run => return true,
+        TickDecision::Hold => return false,
+        TickDecision::Consume { params, generation } => (params, generation),
     };
 
-    let mut grant = ConsumeGrant::begin(thread);
+    if unsafe { read::<u32>(GUI_PTR_VA) } == 0 {
+        return false;
+    }
 
-    // SAFETY: The stage loader thread no longer touches ECL/resource memory from this point onward in the tick.
+    // SAFETY: The loader has published, so nothing else touches ECL or resource memory for the rest of this tick.
     let token = unsafe { MainToken::new(thread) };
     let stage = unsafe { read::<u32>(STAGE_CURRENT_VA) };
 
-    unsafe { revert_previous_warp(token, stage, grant.last_warp()) };
+    unsafe { revert_previous_warp(token, stage, lc.last_warp_mut()) };
 
-    let (reset_outcome, section) = if managed {
-        let params = grant.params();
-        unsafe { apply_managed_warp(token, stage, generation, params, grant.last_warp()) }
+    let (outcome, section) = if params.active {
+        unsafe { apply_warp(token, stage, generation, &params, lc.last_warp_mut()) }
     } else {
         (Outcome::Vanilla, 0)
     };
-
-    grant.finish(thread, generation, reset_outcome, section);
-
-    RUN_TICK
+    if matches!(outcome, Outcome::Applied | Outcome::Vanilla) {
+        write_resources(token, &params);
+    }
+    lc.finish_reload(generation, outcome, section);
+    true
 }
 
 /// Reverts the previous warp's patches if `current_stage` matches the recorded stage patched.
@@ -346,27 +309,24 @@ unsafe fn revert_previous_warp(
     }
 }
 
-/// Writes the starting resources and patches the loaded ECL to the target section, returning the reset's [`Outcome`]
-/// and the now-live section. The section is `0` if the outcome is not [`Outcome::Applied`].
+/// Patches the loaded ECL to the target section, returning the reset's [`Outcome`] and the now-live section.
+/// The section is `0` if the outcome is not [`Outcome::Applied`].
 ///
 /// This function should be called within [`on_gt_tick`] on the first post-load tick before the tick body decodes any ECL.
 /// This ensures that the game's ECL VM doesn't run the unpatched script.
 ///
 /// # Safety
 ///
-/// The loader must have published a managed outcome; see `LOAD_APPLY` in `load.rs`.
-unsafe fn apply_managed_warp(
+/// The loader must have published an armed load; see `LoadHandoff::enter` in `load.rs`.
+unsafe fn apply_warp(
     token: MainToken,
     stage: u32,
     generation: Generation,
-    params: Option<PracticeParams>,
+    params: &PracticeParams,
     last_warp: &mut Option<LiveWarp>,
 ) -> (Outcome, u32) {
-    let Some(params) = params else {
-        return (Outcome::Vanilla, 0);
-    };
     if section_stage(params.section) != Some(stage) {
-        // The reload happened, but no managed section is live.
+        // The reload happened, but the requested section is not on the loaded stage.
         return (Outcome::FailedStageMismatch, 0);
     }
     // SAFETY: The ECL files are loaded by the time the loader publishes, and they stay loaded until the next teardown.
@@ -376,13 +336,11 @@ unsafe fn apply_managed_warp(
 
     let intent = unsafe { apply_section(&mut ecl, params.section, params.phase) };
     let result = if let Some(intent) = intent {
-        intent.arm(token.thread(), generation);
-        write_resources(token, &params);
+        intent.schedule(token.thread(), generation);
         (Outcome::Applied, params.section)
     } else {
         (Outcome::FailedUnmapped, 0)
     };
-    // `revert_previous_warp` ran earlier this tick and cleared the prior record, so this record can be stored for the next load to undo.
     *last_warp = Some(LiveWarp {
         stage,
         undo: ecl.take_undo(),
@@ -392,7 +350,7 @@ unsafe fn apply_managed_warp(
 
 /// Writes the reset's starting resources.
 fn write_resources(token: MainToken, p: &PracticeParams) {
-    // `parse_params` clamped these, so `score / 10` and `value * 100` fit in 32-bit words.
+    // `PracticeParams::parse` clamped these, so `score / 10` and `value * 100` fit in 32-bit words.
     #[expect(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
     unsafe {
         write(token, SCORE_DIV10_VA, (p.score / 10) as u32);
@@ -406,14 +364,16 @@ fn write_resources(token: MainToken, p: &PracticeParams) {
     }
 }
 
+/// Observes one supervisor frame, consuming any unrequested publish.
 pub(crate) fn observe_loads(thread: MainThread) {
-    let generation = load_generation();
-    let loader_running = unsafe { read::<u32>(LOADER_RUNNING_VA) } == 1;
-    observe(thread, generation, loader_running);
+    let status = HANDOFF.status();
+    let mut lc = take_lifecycle(thread);
+    lc.observe(status);
+    put_lifecycle(thread, lc);
 }
 
 /// Starts a requested reset's reload. The request remains pending unless the game is in stable gameplay,
-/// no other scene switch is queued, and the previous stage loader thread has fully exited.
+/// no other scene switch is queued, and the previous stage loader has fully published.
 /// This should only be called from the input hook after [`observe_loads`] within the same tick.
 pub(crate) fn apply_pending_reset(token: MainToken) {
     let thread = token.thread();
@@ -423,26 +383,27 @@ pub(crate) fn apply_pending_reset(token: MainToken) {
         return;
     };
 
-    HANDOFF.arm(plan.managed);
+    if plan.arms_load {
+        HANDOFF.arm();
+    }
 
     if let Some(stage) = plan.stage_select {
         unsafe { write(token, STAGE_SELECT_VA, stage) };
     }
-    if let Some(difficulty) = plan.difficulty {
-        unsafe { write(token, DIFFICULTY_VA, difficulty) };
+    unsafe {
+        write(token, DIFFICULTY_VA, plan.difficulty);
+        write(token, CHARACTER_VA, plan.character);
+        write(token, GAMEMODE_TO_SWITCH_TO_VA, GAMEMODE_RETRY);
     }
-    if let Some(character) = plan.character {
-        unsafe { write(token, CHARACTER_VA, character) };
-    }
-    unsafe { write(token, GAMEMODE_TO_SWITCH_TO_VA, GAMEMODE_RETRY) };
 }
 
 const STAGE_LOADER_THREAD_ENTRY_VA: u32 = 0x0043_c690;
 
 const STAGE_LOADER_THREAD_SPAWN_VA: u32 = 0x0043_cbde;
 
-/// Runs `GameThread::thread_start`, then publishes its outcome.
+/// Marks the load in flight, runs `GameThread::thread_start`, then publishes its outcome.
 unsafe extern "C" fn stage_loader_thread(arg: *mut c_void) -> u32 {
+    HANDOFF.enter();
     let original = unsafe {
         transmute::<*const (), unsafe extern "C" fn(*mut c_void) -> u32>(with_exposed_provenance(
             STAGE_LOADER_THREAD_ENTRY_VA as usize,
@@ -483,7 +444,7 @@ pub(crate) unsafe fn install() {
 
 #[cfg(test)]
 mod test_support {
-    use super::{PARAMS_LEN, PracticeParams, WireParams, parse_params};
+    use super::{PARAMS_LEN, PracticeParams, WireParams};
     use std::mem::transmute;
 
     /// Returns a valid 56-byte params block with the given categorical selectors.
@@ -509,14 +470,26 @@ mod test_support {
 
     /// Returns parsed params for the categorical selectors.
     pub(super) fn params(section: u32, active: u32, phase: u32) -> PracticeParams {
-        parse_params(&wire_bytes(section, active, phase)).expect("valid params")
+        PracticeParams::parse(&wire_bytes(section, active, phase)).expect("valid params")
+    }
+
+    /// Returns parsed params at `difficulty` rather than the default of Lunatic (`3`).
+    pub(super) fn params_at(
+        section: u32,
+        active: u32,
+        phase: u32,
+        difficulty: i32,
+    ) -> PracticeParams {
+        let mut bytes = wire_bytes(section, active, phase);
+        bytes[48..52].copy_from_slice(&difficulty.to_le_bytes());
+        PracticeParams::parse(&bytes).expect("valid params")
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::test_support::{params, wire_bytes};
-    use super::{PARAMS_LEN, parse_params};
+    use super::{PARAMS_LEN, PracticeParams};
 
     #[test]
     fn parse_accept_valid_params() {
@@ -524,15 +497,16 @@ mod tests {
         assert!(params.active);
         assert_eq!(params.section, 1202);
         assert_eq!(params.difficulty, 3);
+        assert_eq!(params.character, 0);
     }
 
     #[test]
     fn parse_length_exact() {
         let bytes = wire_bytes(1202, 1, 0);
-        assert!(parse_params(&bytes[..PARAMS_LEN - 1]).is_none());
+        assert!(PracticeParams::parse(&bytes[..PARAMS_LEN - 1]).is_none());
         let mut long = bytes.to_vec();
         long.push(0);
-        assert!(parse_params(&long).is_none());
+        assert!(PracticeParams::parse(&long).is_none());
     }
 
     #[test]
@@ -540,43 +514,41 @@ mod tests {
         // Difficulty 5 does not exist.
         let mut bytes = wire_bytes(1202, 1, 0);
         bytes[48..52].copy_from_slice(&5i32.to_le_bytes());
-        assert!(parse_params(&bytes).is_none());
+        assert!(PracticeParams::parse(&bytes).is_none());
         // Stage 9 does not exist.
-        assert!(parse_params(&wire_bytes(9101, 1, 0)).is_none());
+        assert!(PracticeParams::parse(&wire_bytes(9101, 1, 0)).is_none());
     }
 
     #[test]
     fn parse_extra_stage_and_difficulty() {
         let mut bytes = wire_bytes(7201, 1, 0);
 
-        assert!(parse_params(&bytes).is_none());
+        assert!(PracticeParams::parse(&bytes).is_none());
 
         bytes[48..52].copy_from_slice(&4i32.to_le_bytes());
-        assert!(parse_params(&bytes).is_some());
-
-        bytes[48..52].copy_from_slice(&(-1i32).to_le_bytes());
-        assert!(parse_params(&bytes).is_none());
+        assert!(PracticeParams::parse(&bytes).is_some());
 
         let mut bytes = wire_bytes(1202, 1, 0);
         bytes[48..52].copy_from_slice(&4i32.to_le_bytes());
-        assert!(parse_params(&bytes).is_none());
+        assert!(PracticeParams::parse(&bytes).is_none());
 
         let mut bytes = wire_bytes(0, 0, 0);
         bytes[48..52].copy_from_slice(&4i32.to_le_bytes());
-        assert!(parse_params(&bytes).is_some());
+        assert!(PracticeParams::parse(&bytes).is_some());
     }
 
     #[test]
     fn parse_ignore_warp_fields_when_inactive() {
         let params = params(9101, 0, 0);
         assert!(!params.active);
+        assert_eq!(params.difficulty, 3);
     }
 
     #[test]
     fn parse_clamp_resources() {
         let mut bytes = wire_bytes(1202, 1, 0);
         bytes[28..32].copy_from_slice(&99i32.to_le_bytes()); // lives
-        let params = parse_params(&bytes).unwrap();
+        let params = PracticeParams::parse(&bytes).unwrap();
         assert_eq!(params.lives, 8);
     }
 }

@@ -199,6 +199,10 @@ pub(super) enum SectionId {
     Named { stage: u32 },
 }
 
+const STAGES: u32 = 7;
+pub(super) const EXTRA_STAGE: u32 = 7;
+pub(super) const EXTRA_DIFFICULTY: u32 = 4;
+
 impl SectionId {
     pub(super) const fn classify(section: u32) -> Self {
         if section >= 10000 && section < 20000 {
@@ -217,7 +221,7 @@ impl SectionId {
         let stage = match self {
             Self::Chapter { stage, .. } | Self::Named { stage } => stage,
         };
-        if stage >= 1 && stage <= 7 {
+        if stage >= 1 && stage <= STAGES {
             Some(stage)
         } else {
             None
@@ -227,6 +231,25 @@ impl SectionId {
 
 pub(super) const fn section_stage(section: u32) -> Option<u32> {
     SectionId::classify(section).stage()
+}
+
+/// Returns whether the provided `section` and `phase` correspond to a dispatchable warp.
+pub(super) const fn section_mapped(section: u32, phase: u32) -> bool {
+    if Phase::parse(section, phase).is_none() {
+        return false;
+    }
+    match SectionId::classify(section) {
+        SectionId::Chapter { stage, portion } => match ChapterDispatch::classify(stage, portion) {
+            ChapterDispatch::StageStart | ChapterDispatch::Warp(_) => true,
+            ChapterDispatch::Unmapped => false,
+        },
+        SectionId::Named { .. } => warp_index(section).is_some(),
+    }
+}
+
+/// Returns whether `stage` can run at `difficulty`.
+pub(super) const fn rank_matches_stage(stage: u32, difficulty: u32) -> bool {
+    (stage == EXTRA_STAGE) == (difficulty == EXTRA_DIFFICULTY)
 }
 
 #[derive(Clone, Copy)]
@@ -323,7 +346,7 @@ enum Op {
 
 type Emit<'e> = dyn FnMut(PrimOp<'_>) + 'e;
 
-/// A primitive patch operation emitted by [`expand_op`].
+/// A primitive patch operation emitted by [`Op::expand`].
 #[derive(Clone, Copy)]
 pub(super) enum PrimOp<'a> {
     File(usize),
@@ -372,28 +395,30 @@ pub(super) struct Warp {
     phase_ops: Option<fn(Phase, &mut Emit<'_>)>,
 }
 
-const fn warp(section: u32, ops: &'static [Op]) -> Warp {
-    Warp {
-        section,
-        ops,
-        phase_ops: None,
+impl Warp {
+    const fn new(section: u32, ops: &'static [Op]) -> Self {
+        Self {
+            section,
+            ops,
+            phase_ops: None,
+        }
     }
-}
 
-const fn warp_with_phase(
-    section: u32,
-    ops: &'static [Op],
-    phase_ops: fn(Phase, &mut Emit<'_>),
-) -> Warp {
-    Warp {
-        section,
-        ops,
-        phase_ops: Some(phase_ops),
+    const fn with_phase(
+        section: u32,
+        ops: &'static [Op],
+        phase_ops: fn(Phase, &mut Emit<'_>),
+    ) -> Self {
+        Self {
+            section,
+            ops,
+            phase_ops: Some(phase_ops),
+        }
     }
 }
 
 pub(super) const WARPS: &[Warp] = &[
-    warp(
+    Warp::new(
         ST1_MID1,
         &[
             Op::Jump {
@@ -406,7 +431,7 @@ pub(super) const WARPS: &[Warp] = &[
             Op::Skip(1),
         ],
     ),
-    warp(
+    Warp::new(
         ST1_MID2,
         &[
             Op::Jump {
@@ -419,7 +444,7 @@ pub(super) const WARPS: &[Warp] = &[
             Op::Skip(1),
         ],
     ),
-    warp(
+    Warp::new(
         ST1_MID3,
         &[
             Op::Jump {
@@ -450,8 +475,8 @@ pub(super) const WARPS: &[Warp] = &[
             },
         ],
     ),
-    warp(ST1_BOSS1, &[Op::BossEntry { stage: 1, skips: 1 }]),
-    warp(
+    Warp::new(ST1_BOSS1, &[Op::BossEntry { stage: 1, skips: 1 }]),
+    Warp::new(
         ST1_BOSS2,
         &[
             Op::BossEntry { stage: 1, skips: 2 },
@@ -464,7 +489,7 @@ pub(super) const WARPS: &[Warp] = &[
             },
         ],
     ),
-    warp(
+    Warp::new(
         ST1_BOSS3,
         &[Op::Nonspell {
             stage: 1,
@@ -476,7 +501,7 @@ pub(super) const WARPS: &[Warp] = &[
             },
         }],
     ),
-    warp(
+    Warp::new(
         ST1_BOSS4,
         &[
             Op::BossEntry { stage: 1, skips: 2 },
@@ -489,7 +514,7 @@ pub(super) const WARPS: &[Warp] = &[
             },
         ],
     ),
-    warp(
+    Warp::new(
         ST2_MID1,
         &[
             Op::Jump {
@@ -502,8 +527,8 @@ pub(super) const WARPS: &[Warp] = &[
             Op::Skip(1),
         ],
     ),
-    warp(ST2_BOSS1, &[Op::BossEntry { stage: 2, skips: 1 }]),
-    warp(
+    Warp::new(ST2_BOSS1, &[Op::BossEntry { stage: 2, skips: 1 }]),
+    Warp::new(
         ST2_BOSS2,
         &[
             Op::BossEntry { stage: 2, skips: 2 },
@@ -516,7 +541,7 @@ pub(super) const WARPS: &[Warp] = &[
             },
         ],
     ),
-    warp(
+    Warp::new(
         ST2_BOSS3,
         &[Op::Nonspell {
             stage: 2,
@@ -528,7 +553,7 @@ pub(super) const WARPS: &[Warp] = &[
             },
         }],
     ),
-    warp(
+    Warp::new(
         ST2_BOSS4,
         &[
             Op::BossEntry { stage: 2, skips: 2 },
@@ -541,7 +566,7 @@ pub(super) const WARPS: &[Warp] = &[
             },
         ],
     ),
-    warp(
+    Warp::new(
         ST2_BOSS5,
         &[Op::Nonspell {
             stage: 2,
@@ -553,7 +578,7 @@ pub(super) const WARPS: &[Warp] = &[
             },
         }],
     ),
-    warp(
+    Warp::new(
         ST2_BOSS6,
         &[
             Op::BossEntry { stage: 2, skips: 2 },
@@ -566,7 +591,7 @@ pub(super) const WARPS: &[Warp] = &[
             },
         ],
     ),
-    warp(
+    Warp::new(
         ST3_MID1,
         &[
             Op::Jump {
@@ -579,7 +604,7 @@ pub(super) const WARPS: &[Warp] = &[
             Op::Skip(1),
         ],
     ),
-    warp(
+    Warp::new(
         ST3_MID2,
         &[
             Op::Jump {
@@ -610,8 +635,8 @@ pub(super) const WARPS: &[Warp] = &[
             },
         ],
     ),
-    warp(ST3_BOSS1, &[Op::BossEntry { stage: 3, skips: 1 }]),
-    warp(
+    Warp::new(ST3_BOSS1, &[Op::BossEntry { stage: 3, skips: 1 }]),
+    Warp::new(
         ST3_BOSS2,
         &[
             Op::BossEntry { stage: 3, skips: 2 },
@@ -624,7 +649,7 @@ pub(super) const WARPS: &[Warp] = &[
             },
         ],
     ),
-    warp(
+    Warp::new(
         ST3_BOSS3,
         &[Op::Nonspell {
             stage: 3,
@@ -636,7 +661,7 @@ pub(super) const WARPS: &[Warp] = &[
             },
         }],
     ),
-    warp(
+    Warp::new(
         ST3_BOSS4,
         &[
             Op::BossEntry { stage: 3, skips: 2 },
@@ -649,7 +674,7 @@ pub(super) const WARPS: &[Warp] = &[
             },
         ],
     ),
-    warp(
+    Warp::new(
         ST3_BOSS5,
         &[Op::Nonspell {
             stage: 3,
@@ -661,7 +686,7 @@ pub(super) const WARPS: &[Warp] = &[
             },
         }],
     ),
-    warp(
+    Warp::new(
         ST3_BOSS6,
         &[
             Op::BossEntry { stage: 3, skips: 2 },
@@ -674,7 +699,7 @@ pub(super) const WARPS: &[Warp] = &[
             },
         ],
     ),
-    warp(
+    Warp::new(
         ST3_BOSS7,
         &[
             Op::BossEntry { stage: 3, skips: 2 },
@@ -687,7 +712,7 @@ pub(super) const WARPS: &[Warp] = &[
             },
         ],
     ),
-    warp(
+    Warp::new(
         ST4_MID1,
         &[
             Op::Jump {
@@ -700,8 +725,8 @@ pub(super) const WARPS: &[Warp] = &[
             Op::Skip(1),
         ],
     ),
-    warp(ST4_BOSS1, &[Op::BossEntry { stage: 4, skips: 1 }]),
-    warp(
+    Warp::new(ST4_BOSS1, &[Op::BossEntry { stage: 4, skips: 1 }]),
+    Warp::new(
         ST4_BOSS2,
         &[
             Op::BossEntry { stage: 4, skips: 2 },
@@ -714,7 +739,7 @@ pub(super) const WARPS: &[Warp] = &[
             },
         ],
     ),
-    warp(
+    Warp::new(
         ST4_BOSS3,
         &[Op::Nonspell {
             stage: 4,
@@ -726,7 +751,7 @@ pub(super) const WARPS: &[Warp] = &[
             },
         }],
     ),
-    warp(
+    Warp::new(
         ST4_BOSS4,
         &[
             Op::BossEntry { stage: 4, skips: 2 },
@@ -739,7 +764,7 @@ pub(super) const WARPS: &[Warp] = &[
             },
         ],
     ),
-    warp(
+    Warp::new(
         ST4_BOSS5,
         &[Op::Nonspell {
             stage: 4,
@@ -751,7 +776,7 @@ pub(super) const WARPS: &[Warp] = &[
             },
         }],
     ),
-    warp(
+    Warp::new(
         ST4_BOSS6,
         &[
             Op::BossEntry { stage: 4, skips: 2 },
@@ -764,7 +789,7 @@ pub(super) const WARPS: &[Warp] = &[
             },
         ],
     ),
-    warp(
+    Warp::new(
         ST4_BOSS7,
         &[
             Op::BossEntry { stage: 4, skips: 2 },
@@ -786,9 +811,9 @@ pub(super) const WARPS: &[Warp] = &[
             },
         ],
     ),
-    warp_with_phase(ST5_MID1, &[Op::Skip(1)], st5_mid1_ops),
-    warp(ST5_BOSS1, &[Op::BossEntry { stage: 5, skips: 1 }]),
-    warp(
+    Warp::with_phase(ST5_MID1, &[Op::Skip(1)], st5_mid1_ops),
+    Warp::new(ST5_BOSS1, &[Op::BossEntry { stage: 5, skips: 1 }]),
+    Warp::new(
         ST5_BOSS2,
         &[
             Op::BossEntry { stage: 5, skips: 2 },
@@ -801,7 +826,7 @@ pub(super) const WARPS: &[Warp] = &[
             },
         ],
     ),
-    warp(
+    Warp::new(
         ST5_BOSS3,
         &[Op::Nonspell {
             stage: 5,
@@ -813,7 +838,7 @@ pub(super) const WARPS: &[Warp] = &[
             },
         }],
     ),
-    warp(
+    Warp::new(
         ST5_BOSS4,
         &[
             Op::BossEntry { stage: 5, skips: 2 },
@@ -826,7 +851,7 @@ pub(super) const WARPS: &[Warp] = &[
             },
         ],
     ),
-    warp(
+    Warp::new(
         ST5_BOSS5,
         &[Op::Nonspell {
             stage: 5,
@@ -838,7 +863,7 @@ pub(super) const WARPS: &[Warp] = &[
             },
         }],
     ),
-    warp(
+    Warp::new(
         ST5_BOSS6,
         &[
             Op::BossEntry { stage: 5, skips: 2 },
@@ -851,7 +876,7 @@ pub(super) const WARPS: &[Warp] = &[
             },
         ],
     ),
-    warp(
+    Warp::new(
         ST5_BOSS7,
         &[
             Op::BossEntry { stage: 5, skips: 2 },
@@ -864,7 +889,7 @@ pub(super) const WARPS: &[Warp] = &[
             },
         ],
     ),
-    warp(
+    Warp::new(
         ST5_BOSS8,
         &[
             Op::BossEntry { stage: 5, skips: 2 },
@@ -877,7 +902,7 @@ pub(super) const WARPS: &[Warp] = &[
             },
         ],
     ),
-    warp(
+    Warp::new(
         ST6_STARS,
         &[
             Op::Jump {
@@ -897,8 +922,8 @@ pub(super) const WARPS: &[Warp] = &[
             Op::Skip(1),
         ],
     ),
-    warp(ST6_BOSS1, &[Op::BossEntry { stage: 6, skips: 1 }]),
-    warp(
+    Warp::new(ST6_BOSS1, &[Op::BossEntry { stage: 6, skips: 1 }]),
+    Warp::new(
         ST6_BOSS2,
         &[
             Op::BossEntry { stage: 6, skips: 2 },
@@ -911,7 +936,7 @@ pub(super) const WARPS: &[Warp] = &[
             },
         ],
     ),
-    warp(
+    Warp::new(
         ST6_BOSS3,
         &[Op::Nonspell {
             stage: 6,
@@ -923,7 +948,7 @@ pub(super) const WARPS: &[Warp] = &[
             },
         }],
     ),
-    warp(
+    Warp::new(
         ST6_BOSS4,
         &[
             Op::BossEntry { stage: 6, skips: 2 },
@@ -936,7 +961,7 @@ pub(super) const WARPS: &[Warp] = &[
             },
         ],
     ),
-    warp(
+    Warp::new(
         ST6_BOSS5,
         &[Op::Nonspell {
             stage: 6,
@@ -948,7 +973,7 @@ pub(super) const WARPS: &[Warp] = &[
             },
         }],
     ),
-    warp(
+    Warp::new(
         ST6_BOSS6,
         &[
             Op::BossEntry { stage: 6, skips: 2 },
@@ -969,7 +994,7 @@ pub(super) const WARPS: &[Warp] = &[
             },
         ],
     ),
-    warp(
+    Warp::new(
         ST6_BOSS7,
         &[Op::Nonspell {
             stage: 6,
@@ -981,7 +1006,7 @@ pub(super) const WARPS: &[Warp] = &[
             },
         }],
     ),
-    warp(
+    Warp::new(
         ST6_BOSS8,
         &[
             Op::BossEntry { stage: 6, skips: 2 },
@@ -1002,7 +1027,7 @@ pub(super) const WARPS: &[Warp] = &[
             },
         ],
     ),
-    warp(
+    Warp::new(
         ST6_BOSS9,
         &[
             Op::BossEntry { stage: 6, skips: 2 },
@@ -1015,7 +1040,7 @@ pub(super) const WARPS: &[Warp] = &[
             },
         ],
     ),
-    warp(
+    Warp::new(
         ST6_BOSS10,
         &[
             Op::BossEntry { stage: 6, skips: 2 },
@@ -1028,7 +1053,7 @@ pub(super) const WARPS: &[Warp] = &[
             },
         ],
     ),
-    warp_with_phase(
+    Warp::with_phase(
         ST6_BOSS11,
         &[
             Op::BossEntry { stage: 6, skips: 2 },
@@ -1050,7 +1075,7 @@ pub(super) const WARPS: &[Warp] = &[
         ],
         st6_boss11_ops,
     ),
-    warp(
+    Warp::new(
         ST7_MID1,
         &[
             Op::Jump {
@@ -1067,7 +1092,7 @@ pub(super) const WARPS: &[Warp] = &[
             },
         ],
     ),
-    warp(
+    Warp::new(
         ST7_MID2,
         &[
             Op::Jump {
@@ -1084,7 +1109,7 @@ pub(super) const WARPS: &[Warp] = &[
             },
         ],
     ),
-    warp(
+    Warp::new(
         ST7_MID3,
         &[
             Op::Jump {
@@ -1101,7 +1126,7 @@ pub(super) const WARPS: &[Warp] = &[
             },
         ],
     ),
-    warp(
+    Warp::new(
         ST7_NS1,
         &[
             Op::St7Bonus,
@@ -1116,7 +1141,7 @@ pub(super) const WARPS: &[Warp] = &[
             Op::Skip(1),
         ],
     ),
-    warp(
+    Warp::new(
         ST7_S1,
         &[
             Op::St7BossEntry,
@@ -1127,7 +1152,7 @@ pub(super) const WARPS: &[Warp] = &[
             },
         ],
     ),
-    warp(
+    Warp::new(
         ST7_NS2,
         &[
             Op::St7BossEntry,
@@ -1161,7 +1186,7 @@ pub(super) const WARPS: &[Warp] = &[
             },
         ],
     ),
-    warp(
+    Warp::new(
         ST7_S2,
         &[
             Op::St7BossEntry,
@@ -1184,7 +1209,7 @@ pub(super) const WARPS: &[Warp] = &[
             },
         ],
     ),
-    warp(
+    Warp::new(
         ST7_NS3,
         &[
             Op::St7BossEntry,
@@ -1217,7 +1242,7 @@ pub(super) const WARPS: &[Warp] = &[
             },
         ],
     ),
-    warp(
+    Warp::new(
         ST7_S3,
         &[
             Op::St7BossEntry,
@@ -1240,7 +1265,7 @@ pub(super) const WARPS: &[Warp] = &[
             },
         ],
     ),
-    warp(
+    Warp::new(
         ST7_NS4,
         &[
             Op::St7BossEntry,
@@ -1277,7 +1302,7 @@ pub(super) const WARPS: &[Warp] = &[
             }, // change 302
         ],
     ),
-    warp(
+    Warp::new(
         ST7_S4,
         &[
             Op::St7BossEntry,
@@ -1304,7 +1329,7 @@ pub(super) const WARPS: &[Warp] = &[
             },
         ],
     ),
-    warp(
+    Warp::new(
         ST7_NS5,
         &[
             Op::St7BossEntry,
@@ -1324,7 +1349,7 @@ pub(super) const WARPS: &[Warp] = &[
             Op::I16 { at: 0x46e8, v: 0 }, // void 306-0
         ],
     ),
-    warp(
+    Warp::new(
         ST7_S5,
         &[
             Op::St7BossEntry,
@@ -1335,7 +1360,7 @@ pub(super) const WARPS: &[Warp] = &[
             },
         ],
     ),
-    warp(
+    Warp::new(
         ST7_NS6,
         &[
             Op::St7BossEntry,
@@ -1368,7 +1393,7 @@ pub(super) const WARPS: &[Warp] = &[
             },
         ],
     ),
-    warp(
+    Warp::new(
         ST7_S6,
         &[
             Op::St7BossEntry,
@@ -1392,7 +1417,7 @@ pub(super) const WARPS: &[Warp] = &[
             },
         ],
     ),
-    warp(
+    Warp::new(
         ST7_NS7,
         &[
             Op::St7BossEntry,
@@ -1425,7 +1450,7 @@ pub(super) const WARPS: &[Warp] = &[
             },
         ],
     ),
-    warp(
+    Warp::new(
         ST7_S7,
         &[
             Op::St7BossEntry,
@@ -1448,7 +1473,7 @@ pub(super) const WARPS: &[Warp] = &[
             },
         ],
     ),
-    warp(
+    Warp::new(
         ST7_NS8,
         &[
             Op::St7BossEntry,
@@ -1484,7 +1509,7 @@ pub(super) const WARPS: &[Warp] = &[
             },
         ],
     ),
-    warp(
+    Warp::new(
         ST7_S8,
         &[
             Op::St7BossEntry,
@@ -1511,7 +1536,7 @@ pub(super) const WARPS: &[Warp] = &[
             },
         ],
     ),
-    warp_with_phase(
+    Warp::with_phase(
         ST7_S9,
         &[
             Op::St7BossEntry,
@@ -1585,7 +1610,7 @@ pub(super) const WARPS: &[Warp] = &[
         ],
         st7_s9_ops,
     ),
-    warp_with_phase(
+    Warp::with_phase(
         ST7_S10,
         &[
             Op::Jump {
@@ -1840,139 +1865,224 @@ const ST7_HIDE_SUBBOSS: &[Op] = &[
     },
 ];
 
-/// Flattens a stored op to primitive ops.
-#[expect(clippy::too_many_lines)]
-fn expand_op(op: Op, emit: &mut Emit<'_>) {
-    match op {
-        Op::File(n) => emit(PrimOp::File(n)),
-        Op::Pos(p) => emit(PrimOp::Pos(p)),
-        Op::Jump {
-            start,
-            expect,
-            dest,
-            at_frame,
-            ecl_time,
-        } => {
-            emit(PrimOp::Jump {
+impl Op {
+    /// Flattens a stored op to primitive ops.
+    #[expect(clippy::too_many_lines)]
+    fn expand(self, emit: &mut Emit<'_>) {
+        match self {
+            Op::File(n) => emit(PrimOp::File(n)),
+            Op::Pos(p) => emit(PrimOp::Pos(p)),
+            Op::Jump {
                 start,
                 expect,
                 dest,
                 at_frame,
                 ecl_time,
-            });
-        }
-        Op::SeqAt { pos, expect, words } => emit(PrimOp::SeqAt { pos, expect, words }),
-        Op::Seq { words } => emit(PrimOp::Seq { words }),
-        Op::I16 { at, v } => emit(PrimOp::I16 { at, v }),
-        Op::I32 { at, v } => emit(PrimOp::I32 { at, v }),
-        Op::U32 { at, v } => emit(PrimOp::U32 { at, v }),
-        Op::Skip(n) => emit(PrimOp::Skip(n)),
-        Op::St7Bonus => emit(PrimOp::St7Bonus),
-        Op::BossEntry { stage, skips } => {
-            let (start, dest, file) = BOSS_ENTRIES[stage - 1];
-            // Every `ST*_START` holds an id-0x17 instruction.
-            emit(PrimOp::Jump {
+            } => {
+                emit(PrimOp::Jump {
+                    start,
+                    expect,
+                    dest,
+                    at_frame,
+                    ecl_time,
+                });
+            }
+            Op::SeqAt { pos, expect, words } => emit(PrimOp::SeqAt { pos, expect, words }),
+            Op::Seq { words } => emit(PrimOp::Seq { words }),
+            Op::I16 { at, v } => emit(PrimOp::I16 { at, v }),
+            Op::I32 { at, v } => emit(PrimOp::I32 { at, v }),
+            Op::U32 { at, v } => emit(PrimOp::U32 { at, v }),
+            Op::Skip(n) => emit(PrimOp::Skip(n)),
+            Op::St7Bonus => emit(PrimOp::St7Bonus),
+            Op::BossEntry { stage, skips } => {
+                let (start, dest, file) = BOSS_ENTRIES[stage - 1];
+                // Every `ST*_START` holds an id-0x17 instruction.
+                emit(PrimOp::Jump {
+                    start,
+                    expect: 0x17,
+                    dest,
+                    at_frame: 60,
+                    ecl_time: 0,
+                });
+                emit(PrimOp::File(file));
+                emit(PrimOp::Skip(skips));
+            }
+            Op::EnterSpell {
                 start,
-                expect: 0x17,
-                dest,
-                at_frame: 60,
-                ecl_time: 0,
-            });
-            emit(PrimOp::File(file));
-            emit(PrimOp::Skip(skips));
-        }
-        Op::EnterSpell {
-            start,
-            dest,
-            at_frame,
-            health,
-            ordinal,
-        } => {
-            // Every `*_SPELL_START` holds an id-0x2a instruction.
-            emit(PrimOp::Jump {
-                start,
-                expect: 0x2a,
                 dest,
                 at_frame,
-                ecl_time: 0,
-            });
-            expand_op(
+                health,
+                ordinal,
+            } => {
+                // Every `*_SPELL_START` holds an id-0x2a instruction.
+                emit(PrimOp::Jump {
+                    start,
+                    expect: 0x2a,
+                    dest,
+                    at_frame,
+                    ecl_time: 0,
+                });
                 Op::SpellFields {
                     base: dest,
                     health,
                     ordinal,
-                },
-                emit,
-            );
-        }
-        Op::SpellFields {
-            base,
-            health,
-            ordinal,
-        } => {
-            emit(PrimOp::I32 {
-                at: base + 0x10,
-                v: health,
-            });
-            emit(PrimOp::I8 {
-                at: base + 0x30,
-                v: ordinal,
-            });
-        }
-        Op::Nonspell { stage, ns } => {
-            expand_op(Op::BossEntry { stage, skips: 2 }, emit);
-            emit(PrimOp::I8 {
-                at: ns.select.0,
-                v: ns.select.1,
-            });
-            emit(PrimOp::I16 {
-                at: ns.item_drops,
-                v: 0,
-            });
-            emit(PrimOp::I16 {
-                at: ns.sound_effect,
-                v: 0,
-            });
-            for &(at, v) in ns.timings {
-                emit(PrimOp::I32 { at, v });
+                }
+                .expand(emit);
             }
-        }
-        Op::St7BossEntry => {
-            emit(PrimOp::Jump {
-                start: ST7_START,
-                expect: 0x17,
-                dest: ST7_BOSS_CREATE_CALL,
-                at_frame: 60,
-                ecl_time: 0,
-            });
-            emit(PrimOp::Skip(2));
-            expand_op(Op::St7HideSubboss, emit);
-        }
-        Op::St7HideSubboss => {
-            for &inner in ST7_HIDE_SUBBOSS {
-                expand_op(inner, emit);
+            Op::SpellFields {
+                base,
+                health,
+                ordinal,
+            } => {
+                emit(PrimOp::I32 {
+                    at: base + 0x10,
+                    v: health,
+                });
+                emit(PrimOp::I8 {
+                    at: base + 0x30,
+                    v: ordinal,
+                });
             }
-        }
-        Op::St7EnterSpell {
-            health,
-            ordinal,
-            junko,
-        } => {
-            emit(PrimOp::File(3));
-            let head = [0, 0x0014_01ff, 0x01ff_0000, 0, health];
-            emit(PrimOp::SeqAt {
-                pos: 0x6d0,
-                expect: 0x16,
-                words: &head,
-            });
-            if junko {
-                emit(PrimOp::Seq {
+            Op::Nonspell { stage, ns } => {
+                Op::BossEntry { stage, skips: 2 }.expand(emit);
+                emit(PrimOp::I8 {
+                    at: ns.select.0,
+                    v: ns.select.1,
+                });
+                emit(PrimOp::I16 {
+                    at: ns.item_drops,
+                    v: 0,
+                });
+                emit(PrimOp::I16 {
+                    at: ns.sound_effect,
+                    v: 0,
+                });
+                for &(at, v) in ns.timings {
+                    emit(PrimOp::I32 { at, v });
+                }
+            }
+            Op::St7BossEntry => {
+                emit(PrimOp::Jump {
+                    start: ST7_START,
+                    expect: 0x17,
+                    dest: ST7_BOSS_CREATE_CALL,
+                    at_frame: 60,
+                    ecl_time: 0,
+                });
+                emit(PrimOp::Skip(2));
+                Op::St7HideSubboss.expand(emit);
+            }
+            Op::St7HideSubboss => {
+                for &inner in ST7_HIDE_SUBBOSS {
+                    inner.expand(emit);
+                }
+            }
+            Op::St7EnterSpell {
+                health,
+                ordinal,
+                junko,
+            } => {
+                emit(PrimOp::File(3));
+                let head = [0, 0x0014_01ff, 0x01ff_0000, 0, health];
+                emit(PrimOp::SeqAt {
+                    pos: 0x6d0,
+                    expect: 0x16,
+                    words: &head,
+                });
+                if junko {
+                    emit(PrimOp::Seq {
+                        words: &[
+                            0,
+                            0x0014_012e,
+                            0x01ff_0000,
+                            0,
+                            5,
+                            0,
+                            0x0018_012f,
+                            0x02ff_0000,
+                            0,
+                            3,
+                            6,
+                        ],
+                    });
+                    emit(PrimOp::Seq {
+                        words: &[
+                            0,
+                            0x0020_000f,
+                            0x01ff_0000,
+                            0,
+                            0xc,
+                            0x7373_6f42,
+                            0x6f70_5f34,
+                            0x0000_0073,
+                        ],
+                    });
+                }
+                let card = [
+                    0,
+                    0x0020_000b,
+                    0x01ff_0000,
+                    0,
+                    0xc,
+                    0x7373_6f42,
+                    0x6472_6143,
+                    ordinal,
+                ];
+                emit(PrimOp::Seq { words: &card });
+            }
+            Op::St7Mid { health, ordinal } => {
+                emit(PrimOp::File(2));
+                // invulnerability window
+                emit(PrimOp::SeqAt {
+                    pos: 0x34c,
+                    expect: 0x1f8,
+                    words: &[0, 0x0020_0203, 0x01ff_0000, 0, 60],
+                });
+                // boss movement restriction
+                emit(PrimOp::SeqAt {
+                    pos: 0x37c,
+                    expect: 0x202,
+                    words: &[
+                        0,
+                        0x002c_01f8,
+                        0x04ff_0000,
+                        0,
+                        0,
+                        0x4300_0000,
+                        0x438c_0000,
+                        0x4380_0000,
+                    ],
+                });
+                emit(PrimOp::I16 { at: 0x33c, v: 0 }); // void wait
+                emit(PrimOp::I32 { at: 0x36c, v: 60 }); // wait time
+                emit(PrimOp::I32 { at: 0x328, v: 60 }); // move time
+                // spell practice jump
+                emit(PrimOp::Jump {
+                    start: 0x48c,
+                    expect: 0x203,
+                    dest: 0x508,
+                    at_frame: 0,
+                    ecl_time: 0,
+                });
+                emit(PrimOp::I32 {
+                    at: 0x2fc,
+                    v: health,
+                });
+                emit(PrimOp::I8 {
+                    at: 0x525,
+                    v: ordinal,
+                });
+            }
+            Op::St6BossEffect { pos_str } => {
+                emit(PrimOp::SeqAt {
+                    pos: ST6_EFFECT_BLOCK,
+                    expect: 0x2a,
                     words: &[
                         0,
                         0x0014_012e,
                         0x01ff_0000,
                         0,
-                        5,
+                        3,
                         0,
                         0x0018_012f,
                         0x02ff_0000,
@@ -1981,114 +2091,31 @@ fn expand_op(op: Op, emit: &mut Emit<'_>) {
                         6,
                     ],
                 });
-                emit(PrimOp::Seq {
-                    words: &[
-                        0,
-                        0x0020_000f,
-                        0x01ff_0000,
-                        0,
-                        0xc,
-                        0x7373_6f42,
-                        0x6f70_5f34,
-                        0x0000_0073,
-                    ],
-                });
-            }
-            let card = [
-                0,
-                0x0020_000b,
-                0x01ff_0000,
-                0,
-                0xc,
-                0x7373_6f42,
-                0x6472_6143,
-                ordinal,
-            ];
-            emit(PrimOp::Seq { words: &card });
-        }
-        Op::St7Mid { health, ordinal } => {
-            emit(PrimOp::File(2));
-            // invulnerability window
-            emit(PrimOp::SeqAt {
-                pos: 0x34c,
-                expect: 0x1f8,
-                words: &[0, 0x0020_0203, 0x01ff_0000, 0, 60],
-            });
-            // boss movement restriction
-            emit(PrimOp::SeqAt {
-                pos: 0x37c,
-                expect: 0x202,
-                words: &[
+                let tail = [
                     0,
-                    0x002c_01f8,
-                    0x04ff_0000,
-                    0,
-                    0,
-                    0x4300_0000,
-                    0x438c_0000,
-                    0x4380_0000,
-                ],
-            });
-            emit(PrimOp::I16 { at: 0x33c, v: 0 }); // void wait
-            emit(PrimOp::I32 { at: 0x36c, v: 60 }); // wait time
-            emit(PrimOp::I32 { at: 0x328, v: 60 }); // move time
-            // spell practice jump
-            emit(PrimOp::Jump {
-                start: 0x48c,
-                expect: 0x203,
-                dest: 0x508,
-                at_frame: 0,
-                ecl_time: 0,
-            });
-            emit(PrimOp::I32 {
-                at: 0x2fc,
-                v: health,
-            });
-            emit(PrimOp::I8 {
-                at: 0x525,
-                v: ordinal,
-            });
-        }
-        Op::St6BossEffect { pos_str } => {
-            emit(PrimOp::SeqAt {
-                pos: ST6_EFFECT_BLOCK,
-                expect: 0x2a,
-                words: &[
-                    0,
-                    0x0014_012e,
+                    0x0020_000f,
                     0x01ff_0000,
                     0,
-                    3,
-                    0,
-                    0x0018_012f,
-                    0x02ff_0000,
-                    0,
-                    3,
-                    6,
-                ],
-            });
-            let tail = [
-                0,
-                0x0020_000f,
-                0x01ff_0000,
-                0,
-                0xc,
-                0x7373_6f42,
-                pos_str,
-                0x0000_0073,
-            ];
-            emit(PrimOp::Seq { words: &tail });
+                    0xc,
+                    0x7373_6f42,
+                    pos_str,
+                    0x0000_0073,
+                ];
+                emit(PrimOp::Seq { words: &tail });
+            }
         }
     }
 }
 
-/// Emits the full stream of primitive ops for a named section.
-pub(super) fn expand_named(row: &Warp, phase: Phase, emit: &mut Emit<'_>) {
-    for &op in row.ops {
-        expand_op(op, emit);
-    }
-    if let Some(phase_ops) = row.phase_ops {
-        phase_ops(phase, emit);
+impl Warp {
+    /// Emits the full stream of primitive ops for a named section.
+    pub(super) fn expand(&self, phase: Phase, emit: &mut Emit<'_>) {
+        for &op in self.ops {
+            op.expand(emit);
+        }
+        if let Some(phase_ops) = self.phase_ops {
+            phase_ops(phase, emit);
+        }
     }
 }
 
@@ -2190,18 +2217,39 @@ const CHAPTER_WARPS: &[(u32, u32, ChapterWarp)] = &[
     (7, 9, ChapterWarp::new(0x9338, 90).sub(0x5f84, 0xb, 0x6154)),
 ];
 
+/// What a `(stage, portion)` pair dispatches to.
+enum ChapterDispatch {
+    StageStart,
+    Warp(&'static ChapterWarp),
+    Unmapped,
+}
+
+impl ChapterDispatch {
+    const fn classify(stage: u32, portion: u32) -> Self {
+        if portion == 1 {
+            if stage >= 1 && stage <= STAGES {
+                return Self::StageStart;
+            }
+            return Self::Unmapped;
+        }
+        let mut i = 0;
+        while i < CHAPTER_WARPS.len() {
+            if CHAPTER_WARPS[i].0 == stage && CHAPTER_WARPS[i].1 == portion {
+                return Self::Warp(&CHAPTER_WARPS[i].2);
+            }
+            i += 1;
+        }
+        Self::Unmapped
+    }
+}
+
 /// Emits the full stream of primitive ops for a chapter warp.
 /// Returns whether the stage and portion mapped to a valid chapter warp. `false` means nothing was emitted.
 pub(super) fn expand_chapter(stage: u32, portion: u32, emit: &mut Emit<'_>) -> bool {
-    // Portion 1 of every stage is the stage start, so there is no warp.
-    if portion == 1 {
-        return (1..=7).contains(&stage);
-    }
-    let Some((_, _, row)) = CHAPTER_WARPS
-        .iter()
-        .find(|&&(s, p, _)| s == stage && p == portion)
-    else {
-        return false;
+    let row = match ChapterDispatch::classify(stage, portion) {
+        ChapterDispatch::StageStart => return true,
+        ChapterDispatch::Warp(row) => row,
+        ChapterDispatch::Unmapped => return false,
     };
     // Every `CHAPTER_STARTS` offset holds an id-0x2a instruction.
     emit(PrimOp::Jump {
@@ -2277,9 +2325,25 @@ const _: () = {
     while c < CHAPTER_WARPS.len() {
         let (stage, portion, _) = CHAPTER_WARPS[c];
         assert!(
-            stage >= 1 && stage <= 7 && portion >= 2,
+            stage >= 1 && stage <= STAGES && portion >= 2,
             "chapter row must specify a real stage and a warpable portion",
         );
         c += 1;
+    }
+
+    let mut w = 0;
+    while w < WARPS.len() {
+        let ops = WARPS[w].ops;
+        let mut o = 0;
+        while o < ops.len() {
+            if let Op::BossEntry { stage, .. } | Op::Nonspell { stage, .. } = ops[o] {
+                assert!(
+                    stage >= 1 && stage <= BOSS_ENTRIES.len(),
+                    "BossEntry/Nonspell stage must index BOSS_ENTRIES"
+                );
+            }
+            o += 1;
+        }
+        w += 1;
     }
 };

@@ -1,14 +1,9 @@
-//! The stage-load counter, plus handoff between the loader thread and main thread.
+//! Stage-load counter for tracking handoff between the loader thread and main thread.
+//!
+//! The counter starts even. The stage loader thread increments it to odd at its entry and back to even at its ret.
+//! So, `generation = counter / 2` counts publishes, and an odd counter value means a load is between entry and publish.
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-
-/// The game is between resets, or the loader has enabled `GameThread::on_tick` but not yet reached the `thread_start` ret.
-const LOAD_NOT_SEEN: u32 = 0;
-/// The published load did not consume an arm. This occurs during an unrequested load
-/// (menu entry, game-over re-entry, natural clear) or a reset with inactive params.
-const LOAD_VANILLA: u32 = 1;
-/// The published load consumed an arm, so its first tick applies a warp.
-const LOAD_APPLY: u32 = 2;
 
 /// A sample of the stage-load counter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,52 +25,130 @@ impl Generation {
     }
 }
 
+/// What the main thread sees of the loader thread.
+#[derive(Clone, Copy)]
+pub(super) enum LoadStatus {
+    /// A load is between loader entry and publish. In this state, arming should not be requested and ECL memory should not be touched.
+    InFlight,
+    /// No load is running.
+    Settled {
+        /// The number of publishes.
+        generation: Generation,
+        /// Whether the latest publish's load took the arm.
+        armed: bool,
+    },
+}
+
 /// Cross-thread atomics for handoff between the loader thread and main thread.
 pub(super) struct LoadHandoff {
-    state: AtomicU32,
+    /// The value is odd while a load is between loader entry and publish. `generation = counter / 2`.
+    counter: AtomicU32,
+    /// Whether the in-flight (or latest) load took the arm. Written at loader entry.
     armed: AtomicBool,
-    generation: AtomicU32,
+    /// Arm request set by the main thread. Taken at the next loader entry.
+    arm_request: AtomicBool,
 }
 
-pub(super) static HANDOFF: LoadHandoff = LoadHandoff {
-    state: AtomicU32::new(LOAD_NOT_SEEN),
-    armed: AtomicBool::new(false),
-    generation: AtomicU32::new(0),
-};
+pub(super) static HANDOFF: LoadHandoff = LoadHandoff::new();
 
 impl LoadHandoff {
-    /// Forgets any unconsumed publish and records whether the upcoming load is managed.
-    /// This is called on the main thread when starting a reset's reload.
-    ///
-    /// This must run before the `GAMEMODE_RETRY` write that lets the load start.
-    pub(super) fn arm(&self, managed: bool) {
-        self.state.store(LOAD_NOT_SEEN, Ordering::Relaxed);
-        self.armed.store(managed, Ordering::Relaxed);
-    }
-
-    /// Consumes the armed flag, bumps the generation, and publishes the outcome. This is called on the loader thread at its ret.
-    pub(super) fn publish(&self) {
-        let armed = self.armed.swap(false, Ordering::Relaxed);
-        self.generation.fetch_add(1, Ordering::Relaxed);
-        let published = if armed { LOAD_APPLY } else { LOAD_VANILLA };
-        self.state.store(published, Ordering::Release);
-    }
-
-    /// Takes an unconsumed publish, returning `(generation, managed)`, or `None` if nothing has published since the arm.
-    /// This is called on the main thread.
-    pub(super) fn consume(&self) -> Option<(Generation, bool)> {
-        let published = self.state.swap(LOAD_NOT_SEEN, Ordering::Acquire);
-        if published == LOAD_NOT_SEEN {
-            return None;
+    const fn new() -> Self {
+        Self {
+            counter: AtomicU32::new(0),
+            armed: AtomicBool::new(false),
+            arm_request: AtomicBool::new(false),
         }
-        Some((
-            Generation(self.generation.load(Ordering::Relaxed)),
-            published == LOAD_APPLY,
-        ))
+    }
+
+    /// Requests that the next load apply a warp on its first tick.
+    ///
+    /// This should be called from the main thread immediately before the `GAMEMODE_RETRY` write,
+    /// and only while [`LoadStatus::Settled`] with every publish consumed.
+    pub(super) fn arm(&self) {
+        self.arm_request.store(true, Ordering::Relaxed);
+    }
+
+    /// Marks a load in flight and takes the arm request.
+    ///
+    /// This should be called from the loader thread at its entry.
+    pub(super) fn enter(&self) {
+        let armed = self.arm_request.swap(false, Ordering::Relaxed);
+        self.armed.store(armed, Ordering::Relaxed);
+        self.counter.fetch_add(1, Ordering::Release);
+    }
+
+    /// Publishes the load.
+    ///
+    /// This should be called from the loader thread at its ret.
+    pub(super) fn publish(&self) {
+        self.counter.fetch_add(1, Ordering::Release);
+    }
+
+    /// Samples the counter.
+    ///
+    /// This should be called from the main thread.
+    pub(super) fn status(&self) -> LoadStatus {
+        let counter = self.counter.load(Ordering::Acquire);
+        if counter % 2 == 1 {
+            LoadStatus::InFlight
+        } else {
+            LoadStatus::Settled {
+                generation: Generation(counter / 2),
+                armed: self.armed.load(Ordering::Relaxed),
+            }
+        }
     }
 }
 
-/// Returns the live load counter.
+/// Returns the generation of the latest published load.
 pub(crate) fn load_generation() -> Generation {
-    Generation(HANDOFF.generation.load(Ordering::Relaxed))
+    Generation(HANDOFF.counter.load(Ordering::Relaxed) / 2)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Generation, LoadHandoff, LoadStatus};
+
+    fn settled(handoff: &LoadHandoff) -> (Generation, bool) {
+        match handoff.status() {
+            LoadStatus::InFlight => panic!("expected a settled status"),
+            LoadStatus::Settled { generation, armed } => (generation, armed),
+        }
+    }
+
+    #[test]
+    fn parity_track_load_window() {
+        let handoff = LoadHandoff::new();
+        assert_eq!(settled(&handoff), (Generation::for_test(0), false));
+        handoff.enter();
+        assert!(matches!(handoff.status(), LoadStatus::InFlight));
+        handoff.publish();
+        assert_eq!(settled(&handoff), (Generation::for_test(1), false));
+    }
+
+    #[test]
+    fn arm_taken_by_next_entry() {
+        let handoff = LoadHandoff::new();
+        handoff.arm();
+        handoff.enter();
+        handoff.publish();
+        assert_eq!(settled(&handoff), (Generation::for_test(1), true));
+        // The arm was consumed, so the following load is unarmed.
+        handoff.enter();
+        handoff.publish();
+        assert_eq!(settled(&handoff), (Generation::for_test(2), false));
+    }
+
+    #[test]
+    fn load_enter_before_arm() {
+        let handoff = LoadHandoff::new();
+        handoff.enter();
+        handoff.arm();
+        handoff.publish();
+        assert_eq!(settled(&handoff), (Generation::for_test(1), false));
+        // The arm waits for the next load.
+        handoff.enter();
+        handoff.publish();
+        assert_eq!(settled(&handoff), (Generation::for_test(2), true));
+    }
 }

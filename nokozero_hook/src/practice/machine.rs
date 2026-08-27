@@ -1,7 +1,7 @@
 //! Reset/load state machine logic.
 
-use super::data::section_stage;
-use super::load::Generation;
+use super::data::{rank_matches_stage, section_stage};
+use super::load::{Generation, LoadStatus};
 use super::{LiveWarp, PracticeParams};
 
 /// Wire codes for the observation's `reset_outcome` word describing the reset from `reset_seq`.
@@ -11,11 +11,15 @@ pub(crate) enum Outcome {
     Pending = 1,
     Applied = 2,
     Vanilla = 3,
-    /// The `(section, phase)` pair is in range for a stage but isn't listed in the warp catalog.
+    /// The catalog refused the `(section, phase)` pair at apply time.
     FailedUnmapped = 4,
+    /// The reload landed on a stage other than the requested section's.
     FailedStageMismatch = 5,
     /// The stage's ECL files were not resolvable when the warp was attempted.
     FailedNoEcl = 6,
+    /// A reset asked to restart the live stage at an invalid difficulty.
+    /// (For example, Extra stage segments only exist on the Extra difficulty.)
+    FailedDifficultyMismatch = 7,
 }
 
 #[derive(Clone, Copy)]
@@ -23,15 +27,9 @@ enum ResetState {
     /// No reset has ever been accepted.
     Idle,
     /// Reset accepted; waiting for a stable in-stage frame without an unpublished load.
-    Requested {
-        seq: u32,
-        params: Option<PracticeParams>,
-    },
+    Requested { seq: u32, params: PracticeParams },
     /// The reload has been triggered (teardown queued, tick guard holding); waiting for it to publish.
-    Reloading {
-        seq: u32,
-        params: Option<PracticeParams>,
-    },
+    Reloading { seq: u32, params: PracticeParams },
     /// This is reported until replaced by the next command.
     Done { seq: u32, outcome: Outcome },
 }
@@ -41,14 +39,25 @@ struct CurrentLoad {
     section: u32,
 }
 
+/// What the tick guard should do with a tick.
+pub(super) enum TickDecision {
+    /// There is no reload in progress. The tick is untouched.
+    Run,
+    /// A reload has not published yet, or the loader thread is managing the ECL buffers. The tick is held.
+    Hold,
+    /// A reload has been published. The tick is consumed, the previous warp is reverted, and the new warp is applied iff `params.active`.
+    Consume {
+        params: PracticeParams,
+        generation: Generation,
+    },
+}
+
 /// Everything that the main thread knows about the reset/load lifecycle.
 /// Transitions are methods that take the environment as parameters and return writes to be performed by the caller.
 pub(super) struct Lifecycle {
     reset: ResetState,
     /// The last consumed load.
     current_load: CurrentLoad,
-    /// Whether a load whose publish is not yet consumed has been observed running.
-    load_in_flight: bool,
     /// The live warp's undo record.
     last_warp: Option<LiveWarp>,
 }
@@ -57,27 +66,26 @@ pub(super) struct Lifecycle {
 pub(super) struct ReloadPlan {
     /// `STAGE_SELECT` value when the reset involves a warp with a decodable stage.
     pub(super) stage_select: Option<u32>,
-    /// `DIFFICULTY` value. `None` = leave as-is.
-    pub(super) difficulty: Option<u32>,
-    /// `CHARACTER` value. `None` = leave as-is.
-    pub(super) character: Option<u32>,
-    /// Whether the upcoming load is managed (i.e. whether its first tick applies a warp).
-    pub(super) managed: bool,
+    /// `DIFFICULTY` value.
+    pub(super) difficulty: u32,
+    /// `CHARACTER` value.
+    pub(super) character: u32,
+    /// Whether the upcoming load should take an arm (i.e. whether its first tick applies a warp).
+    pub(super) arms_load: bool,
 }
 
 impl Lifecycle {
-    /// The state before claiming. No reset has been accepted, the generation is 0 and unconsumed, and there are no ECL patches to undo.
+    /// The initial state. No reset has been accepted, the generation is 0 and consumed, and there are no ECL patches to undo.
     pub(super) const INIT: Self = Self {
         reset: ResetState::Idle,
         current_load: CurrentLoad {
             generation: Generation::PRE_LOAD,
             section: 0,
         },
-        load_in_flight: false,
         last_warp: None,
     };
 
-    /// Accepts a decoded RESET command. Returns `false` if a previous reset is still in flight (which means a protocol violation).
+    /// Accepts a decoded RESET command. Returns `false` if a previous reset is still pending (which means a protocol violation).
     pub(super) fn accept(&mut self, seq: u32, params: PracticeParams) -> bool {
         if matches!(
             self.reset,
@@ -85,54 +93,86 @@ impl Lifecycle {
         ) {
             return false;
         }
-        self.reset = ResetState::Requested {
-            seq,
-            params: Some(params).filter(|p| p.active),
-        };
+        self.reset = ResetState::Requested { seq, params };
         true
     }
 
-    /// Observes one supervisor frame by consuming an unmanaged generation bump.
-    pub(super) fn observe(&mut self, generation: Generation, loader_running: bool) {
-        if generation != self.current_load.generation {
+    /// Observes one supervisor frame, consuming a settled publish unless a reset reload is in progress.
+    pub(super) fn observe(&mut self, status: LoadStatus) {
+        let LoadStatus::Settled { generation, .. } = status else {
+            return;
+        };
+        if generation != self.current_load.generation
+            && !matches!(self.reset, ResetState::Reloading { .. })
+        {
             self.consume_load(generation, 0);
-            if !matches!(self.reset, ResetState::Reloading { .. }) {
-                self.last_warp = None;
-            }
-        }
-        if loader_running {
-            self.load_in_flight = true;
         }
     }
 
-    /// Transitions from [`ResetState::Requested`] to [`ResetState::Reloading`] if `stable_ingame` is true
+    /// Transitions from [`ResetState::Requested`] to [`ResetState::Reloading`] if `stable_ingame` is `true`
     /// (i.e. no other scene switch is queued). Returns the writes to perform, or `None` to keep the state at [`ResetState::Requested`].
-    pub(super) fn try_start_reload(&mut self, stable_ingame: bool) -> Option<ReloadPlan> {
+    pub(super) fn try_start_reload(
+        &mut self,
+        stable_ingame: bool,
+        status: LoadStatus,
+        loader_running: bool,
+        current_stage: u32,
+    ) -> Option<ReloadPlan> {
         let ResetState::Requested { seq, params } = self.reset else {
             return None;
         };
-        if !stable_ingame || self.load_in_flight {
+
+        let load_window_open = loader_running
+            || match status {
+                LoadStatus::InFlight => true,
+                LoadStatus::Settled { generation, .. } => {
+                    generation != self.current_load.generation
+                }
+            };
+        if !stable_ingame || load_window_open {
             return None;
         }
+
+        if !params.active && !rank_matches_stage(current_stage, params.difficulty) {
+            self.reset = ResetState::Done {
+                seq,
+                outcome: Outcome::FailedDifficultyMismatch,
+            };
+            return None;
+        }
+
         self.reset = ResetState::Reloading { seq, params };
         Some(ReloadPlan {
-            stage_select: params.and_then(|p| section_stage(p.section)),
-            difficulty: params.and_then(|p| u32::try_from(p.difficulty).ok()),
-            character: params.and_then(|p| u32::try_from(p.character).ok()),
-            managed: params.is_some(),
+            stage_select: params
+                .active
+                .then(|| section_stage(params.section))
+                .flatten(),
+            difficulty: params.difficulty,
+            character: params.character,
+            arms_load: params.active,
         })
     }
 
-    /// Returns whether the tick guard should be holding ticks (i.e. whether the current state is [`ResetState::Reloading`]).
-    pub(super) fn reset_reloading(&self) -> bool {
-        matches!(self.reset, ResetState::Reloading { .. })
-    }
-
-    /// Returns the warp params of the reset whose reload is in progress, or `None` for vanilla behavior.
-    pub(super) fn reloading_params(&self) -> Option<PracticeParams> {
-        match self.reset {
-            ResetState::Reloading { params, .. } => params,
-            ResetState::Idle | ResetState::Requested { .. } | ResetState::Done { .. } => None,
+    /// Decides the tick guard's action.
+    pub(super) fn tick_decision(&self, status: LoadStatus) -> TickDecision {
+        let ResetState::Reloading { params, .. } = self.reset else {
+            return TickDecision::Run;
+        };
+        match status {
+            // Between loader entry and publish, the loader thread manages the ECL buffers.
+            LoadStatus::InFlight => TickDecision::Hold,
+            LoadStatus::Settled { generation, armed } => {
+                if generation == self.current_load.generation {
+                    // The reload has not published yet.
+                    TickDecision::Hold
+                } else {
+                    assert!(
+                        armed == params.active,
+                        "load handoff and reset request diverge"
+                    );
+                    TickDecision::Consume { params, generation }
+                }
+            }
         }
     }
 
@@ -142,12 +182,7 @@ impl Lifecycle {
     }
 
     /// Transitions from [`ResetState::Reloading`] to [`ResetState::Done`], consuming the new stage load parameters.
-    pub(super) fn finish_managed(
-        &mut self,
-        generation: Generation,
-        outcome: Outcome,
-        section: u32,
-    ) {
+    pub(super) fn finish_reload(&mut self, generation: Generation, outcome: Outcome, section: u32) {
         self.consume_load(generation, section);
         if let ResetState::Reloading { seq, .. } = self.reset {
             self.reset = ResetState::Done { seq, outcome };
@@ -159,7 +194,6 @@ impl Lifecycle {
             generation,
             section,
         };
-        self.load_in_flight = false;
     }
 
     /// Returns the `(load_generation, reset_seq, reset_outcome, applied_section)` wire values.
@@ -182,9 +216,26 @@ impl Lifecycle {
 
 #[cfg(test)]
 mod tests {
+    use super::super::data::{EXTRA_DIFFICULTY, EXTRA_STAGE};
     use super::super::ecl::EclUndo;
-    use super::super::test_support::params;
-    use super::{Generation, Lifecycle, LiveWarp, Outcome, ReloadPlan};
+    use super::super::test_support::{params, params_at};
+    use super::{Generation, Lifecycle, LiveWarp, LoadStatus, Outcome, ReloadPlan, TickDecision};
+
+    const LIVE_STAGE: u32 = 1;
+
+    fn settled(generation: u32) -> LoadStatus {
+        LoadStatus::Settled {
+            generation: Generation::for_test(generation),
+            armed: false,
+        }
+    }
+
+    fn settled_armed(generation: u32) -> LoadStatus {
+        LoadStatus::Settled {
+            generation: Generation::for_test(generation),
+            armed: true,
+        }
+    }
 
     #[test]
     fn wire_reset_phases() {
@@ -192,9 +243,12 @@ mod tests {
         assert_eq!(lc.wire(), (Generation::for_test(0), 0, Outcome::Idle, 0));
         assert!(lc.accept(5, params(1202, 1, 0)));
         assert_eq!(lc.wire(), (Generation::for_test(0), 5, Outcome::Pending, 0));
-        assert!(lc.try_start_reload(true).is_some());
+        assert!(
+            lc.try_start_reload(true, settled(0), false, LIVE_STAGE)
+                .is_some()
+        );
         assert_eq!(lc.wire(), (Generation::for_test(0), 5, Outcome::Pending, 0));
-        lc.finish_managed(Generation::for_test(1), Outcome::Applied, 1202);
+        lc.finish_reload(Generation::for_test(1), Outcome::Applied, 1202);
         assert_eq!(
             lc.wire(),
             (Generation::for_test(1), 5, Outcome::Applied, 1202)
@@ -206,9 +260,12 @@ mod tests {
         let mut lc = Lifecycle::INIT;
         assert!(lc.accept(1, params(1202, 1, 0)));
         assert!(!lc.accept(2, params(1202, 1, 0)));
-        assert!(lc.try_start_reload(true).is_some());
+        assert!(
+            lc.try_start_reload(true, settled(0), false, LIVE_STAGE)
+                .is_some()
+        );
         assert!(!lc.accept(3, params(1202, 1, 0)));
-        lc.finish_managed(Generation::for_test(1), Outcome::Applied, 1202);
+        lc.finish_reload(Generation::for_test(1), Outcome::Applied, 1202);
         assert!(lc.accept(4, params(1202, 1, 0)));
     }
 
@@ -216,81 +273,165 @@ mod tests {
     fn try_start_reload_environment_gate() {
         let mut lc = Lifecycle::INIT;
         assert!(lc.accept(1, params(1202, 1, 0)));
-        assert!(lc.try_start_reload(false).is_none());
-        lc.load_in_flight = true;
-        assert!(lc.try_start_reload(true).is_none());
-        lc.load_in_flight = false;
-        let plan = lc.try_start_reload(true).expect("reload starts");
+        assert!(
+            lc.try_start_reload(false, settled(0), false, LIVE_STAGE)
+                .is_none()
+        );
+        assert!(
+            lc.try_start_reload(true, LoadStatus::InFlight, false, LIVE_STAGE)
+                .is_none()
+        );
+        assert!(
+            lc.try_start_reload(true, settled(0), true, LIVE_STAGE)
+                .is_none()
+        );
+        assert!(
+            lc.try_start_reload(true, settled(1), false, LIVE_STAGE)
+                .is_none()
+        );
+        let plan = lc
+            .try_start_reload(true, settled(0), false, LIVE_STAGE)
+            .expect("reload starts");
         assert_eq!(
             plan,
             ReloadPlan {
                 stage_select: Some(1),
-                difficulty: Some(3),
-                character: Some(0),
-                managed: true,
+                difficulty: 3,
+                character: 0,
+                arms_load: true,
             }
         );
-        assert!(lc.reset_reloading());
     }
 
     #[test]
-    fn vanilla_reload_is_unmanaged() {
+    fn vanilla_reload_spec() {
         let mut lc = Lifecycle::INIT;
         assert!(lc.accept(1, params(0, 0, 0)));
-        let plan = lc.try_start_reload(true).expect("reload starts");
+        let plan = lc
+            .try_start_reload(true, settled(0), false, LIVE_STAGE)
+            .expect("reload starts");
         assert_eq!(
             plan,
             ReloadPlan {
                 stage_select: None,
-                difficulty: None,
-                character: None,
-                managed: false,
+                difficulty: 3,
+                character: 0,
+                arms_load: false,
             }
         );
+        let TickDecision::Consume { params, .. } = lc.tick_decision(settled(1)) else {
+            panic!("publish is for the reload");
+        };
+        assert!(!params.active);
     }
 
     #[test]
-    fn managed_consume_report_reloading_seq() {
+    fn observe_consume_unrequested_publishes() {
         let mut lc = Lifecycle::INIT;
-        assert!(lc.accept(7, params(1202, 1, 0)));
-        assert!(lc.try_start_reload(true).is_some());
-        lc.last_warp = Some(LiveWarp {
-            stage: 1,
-            undo: EclUndo::default(),
-        });
-        lc.finish_managed(Generation::for_test(3), Outcome::Applied, 1202);
-        assert_eq!(
-            lc.wire(),
-            (Generation::for_test(3), 7, Outcome::Applied, 1202)
-        );
-        assert!(!lc.load_in_flight);
-        assert!(!lc.reset_reloading());
-        assert!(lc.last_warp.is_some());
-    }
-
-    #[test]
-    fn unmanaged_consume_drop_undo() {
-        let mut lc = Lifecycle::INIT;
-        lc.last_warp = Some(LiveWarp {
-            stage: 1,
-            undo: EclUndo::default(),
-        });
-        lc.observe(Generation::for_test(1), false);
-        assert!(lc.last_warp.is_none());
+        lc.observe(settled(1));
         assert_eq!(lc.wire(), (Generation::for_test(1), 0, Outcome::Idle, 0));
+        assert!(matches!(lc.tick_decision(settled(1)), TickDecision::Run));
     }
 
     #[test]
-    fn unmanaged_bump_keep_undo_while_reloading() {
+    fn observe_leave_reload_publish() {
         let mut lc = Lifecycle::INIT;
         assert!(lc.accept(1, params(1202, 1, 0)));
-        assert!(lc.try_start_reload(true).is_some());
+        assert!(
+            lc.try_start_reload(true, settled(0), false, LIVE_STAGE)
+                .is_some()
+        );
+        lc.observe(settled_armed(1));
+        assert_eq!(lc.wire(), (Generation::for_test(0), 1, Outcome::Pending, 0));
+        assert!(matches!(
+            lc.tick_decision(settled_armed(1)),
+            TickDecision::Consume { .. }
+        ));
+        lc.finish_reload(Generation::for_test(1), Outcome::Applied, 1202);
+        assert_eq!(
+            lc.wire(),
+            (Generation::for_test(1), 1, Outcome::Applied, 1202)
+        );
+        assert!(matches!(
+            lc.tick_decision(settled_armed(1)),
+            TickDecision::Run
+        ));
+    }
+
+    #[test]
+    fn lifecycle_undo_record() {
+        let mut lc = Lifecycle::INIT;
         lc.last_warp = Some(LiveWarp {
             stage: 1,
             undo: EclUndo::default(),
         });
-        lc.observe(Generation::for_test(1), false);
+
+        lc.observe(settled(1));
         assert!(lc.last_warp.is_some());
-        assert_eq!(lc.wire(), (Generation::for_test(1), 1, Outcome::Pending, 0));
+
+        assert!(lc.accept(1, params(1202, 1, 0)));
+        assert!(
+            lc.try_start_reload(true, settled(1), false, LIVE_STAGE)
+                .is_some()
+        );
+        lc.observe(settled(2));
+        assert!(lc.last_warp.is_some());
+
+        lc.finish_reload(Generation::for_test(2), Outcome::Applied, 1202);
+        assert!(lc.last_warp.is_some());
+    }
+
+    #[test]
+    fn tick_decision_hold_until_publish() {
+        let mut lc = Lifecycle::INIT;
+        assert!(lc.accept(1, params(1202, 1, 0)));
+        assert!(
+            lc.try_start_reload(true, settled(0), false, LIVE_STAGE)
+                .is_some()
+        );
+        assert!(matches!(
+            lc.tick_decision(LoadStatus::InFlight),
+            TickDecision::Hold
+        ));
+        assert!(matches!(lc.tick_decision(settled(0)), TickDecision::Hold));
+        let TickDecision::Consume { params, generation } = lc.tick_decision(settled_armed(1))
+        else {
+            panic!("the reload's publish is consumed");
+        };
+        assert!(params.active);
+        assert_eq!(generation, Generation::for_test(1));
+    }
+
+    #[test]
+    fn inactive_reset_refuse_incompatible_difficulty() {
+        let mut lc = Lifecycle::INIT;
+        assert!(lc.accept(1, params(0, 0, 0)));
+        assert!(
+            lc.try_start_reload(true, settled(0), false, EXTRA_STAGE)
+                .is_none()
+        );
+        assert_eq!(
+            lc.wire(),
+            (
+                Generation::for_test(0),
+                1,
+                Outcome::FailedDifficultyMismatch,
+                0
+            )
+        );
+        assert!(matches!(lc.tick_decision(settled(0)), TickDecision::Run));
+        assert!(lc.accept(2, params_at(0, 0, 0, EXTRA_DIFFICULTY.cast_signed())));
+        assert!(
+            lc.try_start_reload(true, settled(0), false, EXTRA_STAGE)
+                .is_some()
+        );
+
+        let mut lc = Lifecycle::INIT;
+        assert!(lc.accept(1, params_at(0, 0, 0, EXTRA_DIFFICULTY.cast_signed())));
+        assert!(
+            lc.try_start_reload(true, settled(0), false, LIVE_STAGE)
+                .is_none()
+        );
+        assert_eq!(lc.wire().2, Outcome::FailedDifficultyMismatch);
     }
 }

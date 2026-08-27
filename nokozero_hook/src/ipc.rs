@@ -8,7 +8,7 @@
 
 use crate::Action;
 use crate::env::connect_addr;
-use crate::practice::{PARAMS_LEN, PracticeParams, parse_params};
+use crate::practice::{PARAMS_LEN, PracticeParams};
 use std::io::{ErrorKind, Read as _, Write as _};
 use std::net::TcpStream;
 use std::process::abort;
@@ -160,7 +160,7 @@ pub(crate) fn step(obs: ObsFrame<'_>) -> Option<Command> {
                 die("bad RESET length");
             }
             let seq = u32::from_le_bytes(payload[..4].try_into().unwrap());
-            let Some(params) = parse_params(&payload[4..]) else {
+            let Some(params) = PracticeParams::parse(&payload[4..]) else {
                 die("RESET params invalid");
             };
             Some(Command::Reset { seq, params })

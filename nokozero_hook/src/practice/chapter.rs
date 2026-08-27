@@ -11,7 +11,7 @@ use std::arch::naked_asm;
 
 /// The committed warp's [`ChapterIntent`].
 #[derive(Clone, Copy)]
-struct ArmedIntent {
+struct ScheduledIntent {
     /// How many more chapter-end events should skip completion scoring.
     skip_remaining: i32,
     /// The value of `ECLSetChapter(n)` to be set as the current chapter.
@@ -20,23 +20,23 @@ struct ArmedIntent {
     st7_bonus: bool,
 }
 
-impl ArmedIntent {
-    const DISARMED: Self = Self {
+impl ScheduledIntent {
+    const NONE: Self = Self {
         skip_remaining: 0,
         set_chapter: None,
         st7_bonus: false,
     };
 }
 
-static ARMED_INTENT: PerLoad<ArmedIntent> = PerLoad::new(ArmedIntent::DISARMED);
+static SCHEDULED_INTENT: PerLoad<ScheduledIntent> = PerLoad::new(ScheduledIntent::NONE);
 
 impl ChapterIntent {
-    /// Arms the intent recorded by the committed warp.
-    pub(super) fn arm(self, thread: MainThread, generation: Generation) {
-        ARMED_INTENT.set(
+    /// Schedules the intent recorded by the committed warp for this load's chapter hooks.
+    pub(super) fn schedule(self, thread: MainThread, generation: Generation) {
+        SCHEDULED_INTENT.set(
             thread,
             generation,
-            ArmedIntent {
+            ScheduledIntent {
                 skip_remaining: self.skip,
                 set_chapter: self.set,
                 st7_bonus: self.st7_bonus,
@@ -79,7 +79,7 @@ unsafe extern "C" fn chapter_score_trampoline() -> ! {
 /// Returns `1` to suppress the current chapter-end event's completion scoring. Returns `0` to let it run.
 extern "C" fn on_chapter_score() -> u32 {
     let thread = MainThread::current();
-    let suppressed = ARMED_INTENT.update(thread, load_generation(), |intent| {
+    let suppressed = SCHEDULED_INTENT.update(thread, load_generation(), |intent| {
         if intent.skip_remaining == 0 {
             None
         } else {
@@ -116,7 +116,7 @@ unsafe extern "C" fn chapter_set_trampoline() -> ! {
 
 extern "C" fn on_chapter_set() {
     let thread = MainThread::current();
-    if let Some(value) = ARMED_INTENT.update(thread, load_generation(), |intent| {
+    if let Some(value) = SCHEDULED_INTENT.update(thread, load_generation(), |intent| {
         intent.set_chapter.take()
     }) {
         // SAFETY: This runs inside the game's own Pointdevice snapshot routine on the update thread,
@@ -152,7 +152,7 @@ unsafe extern "C" fn st7_chapter_bonus_trampoline() -> ! {
 
 extern "C" fn on_st7_chapter_bonus() {
     let thread = MainThread::current();
-    let owed = ARMED_INTENT.update(thread, load_generation(), |intent| {
+    let owed = SCHEDULED_INTENT.update(thread, load_generation(), |intent| {
         if intent.st7_bonus {
             intent.st7_bonus = false;
             Some(())

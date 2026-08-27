@@ -1,6 +1,6 @@
 //! Dispatch and interpreter over live ECL buffers.
 
-use super::data::{Phase, PrimOp, SectionId, WARPS, expand_chapter, expand_named, warp_index};
+use super::data::{Phase, PrimOp, SectionId, WARPS, expand_chapter, warp_index};
 use super::ecl::Ecl;
 
 /// Chapter effects requested by the dispatched section.
@@ -73,7 +73,7 @@ pub(super) unsafe fn apply_section(
         SectionId::Chapter { stage, portion } => expand_chapter(stage, portion, &mut emit),
         SectionId::Named { .. } => {
             let index = warp_index(section)?;
-            expand_named(&WARPS[index], phase, &mut emit);
+            WARPS[index].expand(phase, &mut emit);
             true
         }
     };

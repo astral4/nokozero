@@ -37,7 +37,8 @@ pub(crate) const GAMEMODE_RETRY: u32 = 10;
 
 /// The inverse of [`LOADER_RUNNING_VA`]. Set when a load has completed.
 pub(crate) const LOADER_DONE_VA: usize = 0x004e_817c;
-/// Set when `0x44d7f0` spawns the stage loader thread. Cleared in `GameThread::thread_start`'s epilogue.
+/// Set (with [`LOADER_DONE_VA`] cleared) inside the spawn helper `0x44d7f0` before the loader thread is created.
+/// Cleared (with [`LOADER_DONE_VA`] set) in scene-loader epilogues.
 pub(crate) const LOADER_RUNNING_VA: usize = 0x004e_8180;
 
 pub(crate) const BULLET_MANAGER_PTR_VA: usize = 0x004e_9a6c;
