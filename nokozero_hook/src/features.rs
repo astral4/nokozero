@@ -162,14 +162,6 @@ impl CurvePoint {
     }
 }
 
-/// Appends one entity section consisting of a `u32` row count followed by each row's cells.
-fn put_section<T, const N: usize>(buf: &mut Vec<u8>, rows: &[T], cells: impl Fn(&T) -> [f32; N]) {
-    put_count(buf, rows.len());
-    for row in rows {
-        put_f32s(buf, cells(row));
-    }
-}
-
 fn put_meta(buf: &mut Vec<u8>, state: Option<&GameState>, meta: &Meta, res: &Resources) {
     put_u32(buf, meta.step);
     put_u32(buf, meta.scene as u32);
@@ -205,6 +197,14 @@ fn put_meta(buf: &mut Vec<u8>, state: Option<&GameState>, meta: &Meta, res: &Res
             ],
         ),
         None => put_f32s(buf, [0.; 4]),
+    }
+}
+
+/// Appends one entity section consisting of a `u32` row count followed by each row's cells.
+fn put_section<T, const N: usize>(buf: &mut Vec<u8>, rows: &[T], cells: impl Fn(&T) -> [f32; N]) {
+    put_count(buf, rows.len());
+    for row in rows {
+        put_f32s(buf, cells(row));
     }
 }
 

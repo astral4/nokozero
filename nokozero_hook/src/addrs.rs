@@ -25,7 +25,6 @@ pub(crate) const BOMBS_VA: usize = 0x004e_745c;
 pub(crate) const BOMB_FRAGMENTS_VA: usize = 0x004e_7460;
 pub(crate) const ENEMIES_SPAWNED_IN_CHAPTER_VA: usize = 0x004e_7484;
 
-pub(crate) const DEVICE_PTR_VA: u32 = 0x004e_77d8;
 /// The active top-level scene.
 pub(crate) const GAMEMODE_VA: usize = 0x004e_7ec8;
 pub(crate) const GAMEMODE_TO_SWITCH_TO_VA: usize = 0x004e_7ecc;

@@ -167,6 +167,34 @@ impl<const N: usize> Site<N> {
     }
 }
 
+/// A fixed-length byte replacement at a [`Site`].
+#[must_use]
+pub(crate) struct Patch<const N: usize> {
+    site: Site<N>,
+    replacement: [u8; N],
+}
+
+impl<const N: usize> Patch<N> {
+    /// Verifies the site holds its expected bytes, writes the replacement, and verifies the site holds the patched bytes after writing.
+    ///
+    /// # Safety
+    ///
+    /// The site must be mapped, and no other thread may execute or write its page for the duration.
+    /// In practice, this means this function should be called during `DLL_PROCESS_ATTACH`.
+    pub(crate) unsafe fn apply(&self) {
+        let Site {
+            addr,
+            expected,
+            name,
+        } = self.site;
+        unsafe {
+            expect_bytes(addr, &expected, name, Stage::PreCheck);
+            patch_bytes(addr, &self.replacement, name);
+            expect_bytes(addr, &self.replacement, name, Stage::PostWrite);
+        }
+    }
+}
+
 /// An `E8 rel32` direct call.
 pub(crate) struct CallSite(Site<REL32_LEN>);
 
@@ -242,34 +270,6 @@ impl NearBranchSite {
     /// Constructs a [`Patch`] forcing the branch to never be taken.
     pub(crate) const fn skip(self) -> Patch<NEAR_LEN> {
         self.site.patch([0x90; _])
-    }
-}
-
-/// A fixed-length byte replacement at a [`Site`].
-#[must_use]
-pub(crate) struct Patch<const N: usize> {
-    site: Site<N>,
-    replacement: [u8; N],
-}
-
-impl<const N: usize> Patch<N> {
-    /// Verifies the site holds its expected bytes, writes the replacement, and verifies the site holds the patched bytes after writing.
-    ///
-    /// # Safety
-    ///
-    /// The site must be mapped, and no other thread may execute or write its page for the duration.
-    /// In practice, this means this function should be called during `DLL_PROCESS_ATTACH`.
-    pub(crate) unsafe fn apply(&self) {
-        let Site {
-            addr,
-            expected,
-            name,
-        } = self.site;
-        unsafe {
-            expect_bytes(addr, &expected, name, Stage::PreCheck);
-            patch_bytes(addr, &self.replacement, name);
-            expect_bytes(addr, &self.replacement, name, Stage::PostWrite);
-        }
     }
 }
 

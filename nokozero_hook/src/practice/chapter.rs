@@ -1,24 +1,41 @@
 //! Patches for chapter semantics and state.
 
 use super::Verdict;
-use super::catalog::ChapterIntent;
-use super::load::{Generation, load_generation};
+use super::load::{Generation, PerLoad, load_generation};
 use crate::addrs::{CURRENT_CHAPTER_VA, ENEMIES_SPAWNED_IN_CHAPTER_VA};
 use crate::mem::write;
 use crate::patch::Site;
-use crate::thread::{MainThread, MainToken, PerLoad};
+use crate::thread::{MainThread, MainToken};
 use std::arch::naked_asm;
 use std::mem::take;
 
-/// The committed warp's [`ChapterIntent`].
-static SCHEDULED_INTENT: PerLoad<ChapterIntent> = PerLoad::new(ChapterIntent::NONE);
+/// Chapter effects requested by the dispatched section and scheduled for the load's chapter hooks.
+#[derive(Clone, Copy)]
+pub(super) struct ChapterIntent {
+    /// How many more chapter-end events should skip completion scoring.
+    pub(super) skip_remaining: i32,
+    /// The value of `ECLSetChapter(n)` to be set as the current chapter.
+    pub(super) set_chapter: Option<i32>,
+    /// Whether the extra stage chapter bonus write is needed. See [`on_st7_chapter_bonus`].
+    pub(super) st7_bonus: bool,
+}
 
 impl ChapterIntent {
+    /// The empty intent with no chapter effects.
+    pub(super) const NONE: Self = Self {
+        skip_remaining: 0,
+        set_chapter: None,
+        st7_bonus: false,
+    };
+
     /// Schedules the intent recorded by the committed warp for this load's chapter hooks.
     pub(super) fn schedule(self, thread: MainThread, generation: Generation) {
         SCHEDULED_INTENT.set(thread, generation, self);
     }
 }
+
+/// The committed warp's [`ChapterIntent`].
+static SCHEDULED_INTENT: PerLoad<ChapterIntent> = PerLoad::new(ChapterIntent::NONE);
 
 const CHAPTER_SCORE: Site<6> = Site::new(
     0x0043_d0ad,

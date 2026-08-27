@@ -1,12 +1,11 @@
 //! Title-menu navigation into practice-mode stages.
 
-use crate::InputFlags;
-use crate::TAP_INTERVAL;
 use crate::addrs::MAIN_MENU_PTR_VA;
 use crate::features::Scene;
 use crate::mem::{read, read_ptr};
 use crate::patch::BranchSite;
 use crate::thread::{MainCell, MainThread};
+use crate::{InputFlags, TAP_INTERVAL};
 
 const MENU_ID_OFFSET: usize = 0x18;
 // 2 = interactive (input is honored)
@@ -94,7 +93,7 @@ impl MenuView {
         }
 
         match self.screen {
-            Some(Screen::Terminal | Screen::Booting) => InputFlags::empty(),
+            Some(Screen::Booting | Screen::Terminal) => InputFlags::empty(),
             Some(Screen::Title) => {
                 // SAFETY: `self.base` was non-null when classified this tick; see `MenuView::classify`.
                 if unsafe { read::<u32>(self.base + MENU_CURSOR_OFFSET) } == TITLE_PRACTICE_START {

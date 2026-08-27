@@ -6,7 +6,7 @@ mod dsound;
 mod out;
 mod window;
 
-use crate::addrs::{DEVICE_PTR_VA, GAMEMODE_INGAME, GAMEMODE_VA};
+use crate::addrs::{GAMEMODE_INGAME, GAMEMODE_VA};
 use crate::env::headless;
 use crate::patch::{BranchSite, Site, op_abs32};
 use std::arch::naked_asm;
@@ -72,6 +72,8 @@ unsafe fn install_frame_limiter_skips() {
         .apply();
     }
 }
+
+const DEVICE_PTR_VA: u32 = 0x004e_77d8;
 
 static DRAW_NORMAL_LANDING_VA: usize = 0x0047_290d;
 static DRAW_NORMAL_CONTINUE_VA: usize = 0x0047_28bb;

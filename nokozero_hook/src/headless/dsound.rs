@@ -56,6 +56,12 @@ unsafe extern "system" fn hook_directsound_create8(
 #[implement(IDirectSound8)]
 struct FakeDirectSound;
 
+impl IDirectSound8_Impl for FakeDirectSound_Impl {
+    fn VerifyCertification(&self) -> Result<u32> {
+        Ok(DS_CERTIFIED)
+    }
+}
+
 impl IDirectSound_Impl for FakeDirectSound_Impl {
     fn CreateSoundBuffer(
         &self,
@@ -122,12 +128,6 @@ impl IDirectSound_Impl for FakeDirectSound_Impl {
     }
 }
 
-impl IDirectSound8_Impl for FakeDirectSound_Impl {
-    fn VerifyCertification(&self) -> Result<u32> {
-        Ok(DS_CERTIFIED)
-    }
-}
-
 #[implement(IDirectSoundBuffer8, IDirectSoundNotify)]
 struct FakeSoundBuffer {
     backing: Backing,
@@ -152,13 +152,34 @@ impl FakeSoundBuffer {
     }
 }
 
-impl IDirectSoundNotify_Impl for FakeSoundBuffer_Impl {
-    fn SetNotificationPositions(
+impl IDirectSoundBuffer8_Impl for FakeSoundBuffer_Impl {
+    fn SetFX(
         &self,
-        _dwpositionnotifies: u32,
-        _pcpositionnotifies: *const DSBPOSITIONNOTIFY,
+        dweffectscount: u32,
+        _pdsfxdesc: *const DSEFFECTDESC,
+        pdwresultcodes: *mut u32,
     ) -> Result<()> {
-        Ok(())
+        unsafe { get_zeroed_array(pdwresultcodes, dweffectscount as usize) }
+    }
+
+    fn AcquireResources(
+        &self,
+        _dwflags: u32,
+        dweffectscount: u32,
+        pdwresultcodes: *mut u32,
+    ) -> Result<()> {
+        unsafe { get_zeroed_array(pdwresultcodes, dweffectscount as usize) }
+    }
+
+    fn GetObjectInPath(
+        &self,
+        _rguidobject: *const GUID,
+        _dwindex: u32,
+        _rguidinterface: *const GUID,
+        ppobject: *mut *mut c_void,
+    ) -> Result<()> {
+        unsafe { get_zeroed(ppobject)? };
+        Err(Error::from_hresult(E_NOTIMPL))
     }
 }
 
@@ -325,33 +346,12 @@ impl IDirectSoundBuffer_Impl for FakeSoundBuffer_Impl {
     }
 }
 
-impl IDirectSoundBuffer8_Impl for FakeSoundBuffer_Impl {
-    fn SetFX(
+impl IDirectSoundNotify_Impl for FakeSoundBuffer_Impl {
+    fn SetNotificationPositions(
         &self,
-        dweffectscount: u32,
-        _pdsfxdesc: *const DSEFFECTDESC,
-        pdwresultcodes: *mut u32,
+        _dwpositionnotifies: u32,
+        _pcpositionnotifies: *const DSBPOSITIONNOTIFY,
     ) -> Result<()> {
-        unsafe { get_zeroed_array(pdwresultcodes, dweffectscount as usize) }
-    }
-
-    fn AcquireResources(
-        &self,
-        _dwflags: u32,
-        dweffectscount: u32,
-        pdwresultcodes: *mut u32,
-    ) -> Result<()> {
-        unsafe { get_zeroed_array(pdwresultcodes, dweffectscount as usize) }
-    }
-
-    fn GetObjectInPath(
-        &self,
-        _rguidobject: *const GUID,
-        _dwindex: u32,
-        _rguidinterface: *const GUID,
-        ppobject: *mut *mut c_void,
-    ) -> Result<()> {
-        unsafe { get_zeroed(ppobject)? };
-        Err(Error::from_hresult(E_NOTIMPL))
+        Ok(())
     }
 }

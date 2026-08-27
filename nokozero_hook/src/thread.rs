@@ -1,6 +1,5 @@
 //! Constructs for main-thread identity and access.
 
-use crate::practice::Generation;
 use std::cell::Cell;
 use std::marker::PhantomData;
 use std::process::abort;
@@ -101,54 +100,8 @@ impl<T: Copy> MainCell<T> {
     }
 }
 
-/// A [`MainCell`] where the value belongs within a single stage load. Writes indicate the value's load [`Generation`].
-/// Reads indicate which generation is requesting the query, and mismatched-generation reads return the state of a brand-new load.
-pub(crate) struct PerLoad<T> {
-    /// The state of a brand-new load.
-    fresh: T,
-    cell: MainCell<Option<(Generation, T)>>,
-}
-
-impl<T: Copy> PerLoad<T> {
-    /// Constructs a new instance. `fresh` must be the state of a brand-new load.
-    pub(crate) const fn new(fresh: T) -> Self {
-        Self {
-            fresh,
-            cell: MainCell::new(None),
-        }
-    }
-
-    /// Returns the value if it was stored under `generation`. Otherwise, returns the fresh value.
-    pub(crate) fn get(&self, thread: MainThread, generation: Generation) -> T {
-        match self.cell.get(thread) {
-            Some((stamp, value)) if stamp == generation => value,
-            _ => self.fresh,
-        }
-    }
-
-    /// Stores `value` as belonging to `generation`.
-    pub(crate) fn set(&self, thread: MainThread, generation: Generation, value: T) {
-        self.cell.set(thread, Some((generation, value)));
-    }
-
-    /// Runs `f` on the current value if it belongs to `generation`. Otherwise, runs `f` on the fresh value.
-    /// If `f` returns `Some(_)`, then modifications to `f`'s input are stored back as the new cell value.
-    /// If `f` returns `None`, then any modifications are discarded and the cell value is left untouched.
-    pub(crate) fn update<R>(
-        &self,
-        thread: MainThread,
-        generation: Generation,
-        f: impl FnOnce(&mut T) -> Option<R>,
-    ) -> Option<R> {
-        let mut value = self.get(thread, generation);
-        let r = f(&mut value)?;
-        self.set(thread, generation, value);
-        Some(r)
-    }
-}
-
 #[cfg(test)]
-mod test_support {
+pub(crate) mod test_support {
     use super::MAIN_TID;
     use std::sync::atomic::Ordering;
     use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -159,10 +112,10 @@ mod test_support {
     /// Acquiring this guard serializes such tests against each other and hands the calling thread an unclaimed `MAIN_TID`,
     /// released again on drop. Tests that construct a [`super::MainThread`] should acquire this first
     /// and hold this for as long as any copy of the witness is in use.
-    pub(super) struct MainClaim(#[expect(dead_code)] MutexGuard<'static, ()>);
+    pub(crate) struct MainClaim(#[expect(dead_code)] MutexGuard<'static, ()>);
 
     impl MainClaim {
-        pub(super) fn acquire() -> Self {
+        pub(crate) fn acquire() -> Self {
             static LOCK: Mutex<()> = Mutex::new(());
 
             // Poisoning only records that an earlier holder panicked.
@@ -183,7 +136,7 @@ mod test_support {
 #[cfg(test)]
 mod tests {
     use super::test_support::MainClaim;
-    use super::{Generation, MainCell, MainThread, PerLoad};
+    use super::{MainCell, MainThread};
 
     #[test]
     fn thread_claim_idempotency() {
@@ -199,50 +152,5 @@ mod tests {
         CELL.set(thread, 5);
         assert_eq!(CELL.replace(thread, 7), 5);
         assert_eq!(CELL.get(thread), 7);
-    }
-
-    #[test]
-    fn per_load_values_scoped_to_generation() {
-        static VALUE: PerLoad<u32> = PerLoad::new(42);
-
-        let _claim = MainClaim::acquire();
-
-        let thread = MainThread::claim();
-        let (g0, g1, g2, g3) = (
-            Generation::for_test(0),
-            Generation::for_test(1),
-            Generation::for_test(2),
-            Generation::for_test(3),
-        );
-
-        // Before any write has occurred, no generation matches, so the fresh value is read.
-        assert_eq!(VALUE.get(thread, g0), 42);
-
-        VALUE.set(thread, g1, 7);
-        assert_eq!(VALUE.get(thread, g1), 7);
-        assert_eq!(VALUE.get(thread, g2), 42);
-        assert_eq!(VALUE.get(thread, g1), 7);
-
-        let x = VALUE.update(thread, g1, |v| {
-            *v *= 2;
-            Some(*v)
-        });
-        assert_eq!(x, Some(14));
-        assert_eq!(VALUE.get(thread, g1), 14);
-
-        let x = VALUE.update(thread, g1, |v| {
-            *v = 99;
-            None::<()>
-        });
-        assert_eq!(x, None);
-        assert_eq!(VALUE.get(thread, g1), 14);
-
-        let x = VALUE.update(thread, g3, |v| {
-            *v += 5;
-            Some(*v)
-        });
-        assert_eq!(x, Some(47));
-        assert_eq!(VALUE.get(thread, g3), 47);
-        assert_eq!(VALUE.get(thread, g1), 42);
     }
 }

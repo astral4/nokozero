@@ -13,13 +13,6 @@ pub(crate) use crate::practice::hit::take_forced_step;
 pub(crate) use crate::practice::load::Generation;
 pub(crate) use crate::practice::machine::Outcome;
 
-use crate::practice::catalog::apply_section;
-use crate::practice::data::{EXTRA_DIFFICULTY, rank_matches_stage, section_mapped, section_stage};
-use crate::practice::ecl::{Ecl, EclUndo};
-use crate::practice::hit::count;
-use crate::practice::load::{HANDOFF, LoadStatus};
-use crate::practice::machine::{Lifecycle, ReloadPlan, TickDecision};
-
 use crate::addrs::{
     BOMB_FRAGMENTS_VA, BOMBS_VA, CHARACTER_VA, DIFFICULTY_VA, GAMEMODE_INGAME, GAMEMODE_RETRY,
     GAMEMODE_TO_SWITCH_TO_VA, GRAZE_VA, GUI_PTR_VA, LIFE_FRAGMENTS_VA, LIVES_VA, LOADER_RUNNING_VA,
@@ -27,6 +20,12 @@ use crate::addrs::{
 };
 use crate::mem::{read, stage_stable, write};
 use crate::patch::{NearBranchSite, Site, op_abs32};
+use crate::practice::catalog::apply_section;
+use crate::practice::data::{EXTRA_DIFFICULTY, rank_matches_stage, section_mapped, section_stage};
+use crate::practice::ecl::{Ecl, EclUndo};
+use crate::practice::hit::count;
+use crate::practice::load::{HANDOFF, LoadStatus};
+use crate::practice::machine::{Lifecycle, ReloadPlan, TickDecision};
 use crate::thread::{MainCell, MainThread, MainToken};
 use std::arch::naked_asm;
 use std::ffi::c_void;
@@ -158,10 +157,41 @@ fn with_lifecycle<R>(thread: MainThread, f: impl FnOnce(&mut Lifecycle) -> R) ->
     result
 }
 
+/// Observes one supervisor frame, consuming any unrequested publish.
+pub(crate) fn observe_loads(thread: MainThread) {
+    let status = HANDOFF.status();
+    with_lifecycle(thread, |lc| lc.observe(status));
+}
+
 /// Accepts a decoded RESET command. Returns `false` if a reset is already pending.
 #[must_use]
 pub(crate) fn accept_reset(thread: MainThread, seq: u32, params: PracticeParams) -> bool {
     with_lifecycle(thread, |lc| lc.accept(seq, params))
+}
+
+/// Starts a requested reset's reload. The request remains pending unless the game is in stable gameplay,
+/// no other scene switch is queued, and the previous stage loader has fully published.
+/// This should only be called from the input hook after [`observe_loads`] within the same tick.
+pub(crate) fn apply_pending_reset(token: MainToken) {
+    let thread = token.thread();
+    let stable =
+        unsafe { stage_stable() && read::<u32>(GAMEMODE_TO_SWITCH_TO_VA) == GAMEMODE_INGAME };
+    let Some(plan) = try_start_reload(thread, stable) else {
+        return;
+    };
+
+    if plan.arms_load {
+        HANDOFF.arm();
+    }
+
+    if let Some(stage) = plan.stage_select {
+        unsafe { write(token, STAGE_SELECT_VA, stage) };
+    }
+    unsafe {
+        write(token, DIFFICULTY_VA, plan.difficulty);
+        write(token, CHARACTER_VA, plan.character);
+        write(token, GAMEMODE_TO_SWITCH_TO_VA, GAMEMODE_RETRY);
+    }
 }
 
 /// Attempts `Requested` -> `Reloading`, returning the writes for the caller to perform.
@@ -198,14 +228,6 @@ impl WireMeta {
     }
 }
 
-/// The entry of `GameThread::on_tick`.
-const GT_TICK: Site<6> = Site::new(
-    0x0043_cc50,
-    [0x55, 0x8b, 0xec, 0x83, 0xe4, 0xf8],
-    "game-tick guard",
-);
-static GT_TICK_CONTINUE_VA: u32 = GT_TICK.after();
-
 /// A detour handler's decision, returned to its naked trampoline in `eax`.
 /// The trampolines run `test eax, eax`, so the return type must define all 32 bits of the register —
 /// hence a `#[repr(u32)]` enum rather than `bool` (which would only define `al`).
@@ -216,6 +238,14 @@ enum Verdict {
     /// Divert from the original path (suppress the death, hold the tick, skip the scoring).
     Divert = 1,
 }
+
+/// The entry of `GameThread::on_tick`.
+const GT_TICK: Site<6> = Site::new(
+    0x0043_cc50,
+    [0x55, 0x8b, 0xec, 0x83, 0xe4, 0xf8],
+    "game-tick guard",
+);
+static GT_TICK_CONTINUE_VA: u32 = GT_TICK.after();
 
 // Runs on every `GameThread::on_tick`.
 #[unsafe(naked)]
@@ -349,37 +379,6 @@ fn write_resources(token: MainToken, p: &PracticeParams) {
         write(token, LIFE_FRAGMENTS_VA, p.life_fragments as u32);
         write(token, BOMBS_VA, p.bombs as u32);
         write(token, BOMB_FRAGMENTS_VA, p.bomb_fragments as u32);
-    }
-}
-
-/// Observes one supervisor frame, consuming any unrequested publish.
-pub(crate) fn observe_loads(thread: MainThread) {
-    let status = HANDOFF.status();
-    with_lifecycle(thread, |lc| lc.observe(status));
-}
-
-/// Starts a requested reset's reload. The request remains pending unless the game is in stable gameplay,
-/// no other scene switch is queued, and the previous stage loader has fully published.
-/// This should only be called from the input hook after [`observe_loads`] within the same tick.
-pub(crate) fn apply_pending_reset(token: MainToken) {
-    let thread = token.thread();
-    let stable =
-        unsafe { stage_stable() && read::<u32>(GAMEMODE_TO_SWITCH_TO_VA) == GAMEMODE_INGAME };
-    let Some(plan) = try_start_reload(thread, stable) else {
-        return;
-    };
-
-    if plan.arms_load {
-        HANDOFF.arm();
-    }
-
-    if let Some(stage) = plan.stage_select {
-        unsafe { write(token, STAGE_SELECT_VA, stage) };
-    }
-    unsafe {
-        write(token, DIFFICULTY_VA, plan.difficulty);
-        write(token, CHARACTER_VA, plan.character);
-        write(token, GAMEMODE_TO_SWITCH_TO_VA, GAMEMODE_RETRY);
     }
 }
 

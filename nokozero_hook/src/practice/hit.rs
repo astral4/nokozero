@@ -1,10 +1,10 @@
 //! Logic and hooking for the player death sequence.
 
 use super::Verdict;
-use super::load::{Generation, load_generation};
+use super::load::{Generation, PerLoad, load_generation};
 use crate::ipc::is_connected;
 use crate::patch::Site;
-use crate::thread::{MainThread, PerLoad};
+use crate::thread::MainThread;
 use std::arch::naked_asm;
 use std::mem::take;
 
@@ -32,16 +32,6 @@ pub(crate) fn take_forced_step(thread: MainThread) -> bool {
     FORCED_STEP_OWED
         .update(thread, load_generation(), |owed| take(owed).then_some(()))
         .is_some()
-}
-
-/// # Safety
-///
-/// The game image must be loaded at its fixed base. This function must be called during `DLL_PROCESS_ATTACH`,
-/// before the game's entry point runs.
-pub(super) unsafe fn install() {
-    unsafe {
-        PLAYER_DIE.jmp(player_die_trampoline as *mut ());
-    }
 }
 
 #[unsafe(naked)]
@@ -84,4 +74,14 @@ extern "C" fn on_player_die() -> Verdict {
         FORCED_STEP_OWED.set(thread, generation, true);
     }
     Verdict::Divert
+}
+
+/// # Safety
+///
+/// The game image must be loaded at its fixed base. This function must be called during `DLL_PROCESS_ATTACH`,
+/// before the game's entry point runs.
+pub(super) unsafe fn install() {
+    unsafe {
+        PLAYER_DIE.jmp(player_die_trampoline as *mut ());
+    }
 }

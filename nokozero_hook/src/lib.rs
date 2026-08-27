@@ -47,16 +47,6 @@ const READ_INTERVAL: u32 = 3;
 /// Rising-edge cadence for injected inputs (e.g. during menu navigation and dialogue).
 const TAP_INTERVAL: u32 = 3;
 
-static FRAME_COUNT: MainCell<u32> = MainCell::new(0);
-
-static STEP_BUFS: MainCell<Option<StepBufs>> = MainCell::new(None);
-
-/// Set when an in-game frame delivers an action differing from [`LAST_ACTION`].
-static INPUT_OVERRIDDEN: MainCell<bool> = MainCell::new(false);
-
-/// The last controller action. Repeated on the frames between exchanges.
-static LAST_ACTION: MainCell<Action> = MainCell::new(Action::neutral());
-
 struct StepBufs {
     state: GameState,
     frame_buf: Vec<u8>,
@@ -110,6 +100,16 @@ impl From<Action> for InputFlags {
         Self::from_bits_retain(action.0)
     }
 }
+
+static FRAME_COUNT: MainCell<u32> = MainCell::new(0);
+
+static STEP_BUFS: MainCell<Option<StepBufs>> = MainCell::new(None);
+
+/// Set when an in-game frame delivers an action differing from [`LAST_ACTION`].
+static INPUT_OVERRIDDEN: MainCell<bool> = MainCell::new(false);
+
+/// The last controller action. Repeated on the frames between exchanges.
+static LAST_ACTION: MainCell<Action> = MainCell::new(Action::neutral());
 
 /// Returns whether a boss dialogue is live in this frame.
 fn dialogue_active() -> bool {

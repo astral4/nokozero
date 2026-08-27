@@ -3,6 +3,7 @@
 //! The counter starts even. The stage loader thread increments it to odd at its entry and back to even at its ret.
 //! So, `generation = counter / 2` counts publishes, and an odd counter value means a load is between entry and publish.
 
+use crate::thread::{MainCell, MainThread};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 /// A sample of the stage-load counter.
@@ -105,9 +106,57 @@ pub(crate) fn load_generation() -> Generation {
     Generation(HANDOFF.counter.load(Ordering::Relaxed) / 2)
 }
 
+/// A [`MainCell`] where the value belongs within a single stage load. Writes indicate the value's load [`Generation`].
+/// Reads indicate which generation is requesting the query, and mismatched-generation reads return the state of a brand-new load.
+pub(super) struct PerLoad<T> {
+    /// The state of a brand-new load.
+    fresh: T,
+    cell: MainCell<Option<(Generation, T)>>,
+}
+
+impl<T: Copy> PerLoad<T> {
+    /// Constructs a new instance. `fresh` must be the state of a brand-new load.
+    pub(super) const fn new(fresh: T) -> Self {
+        Self {
+            fresh,
+            cell: MainCell::new(None),
+        }
+    }
+
+    /// Returns the value if it was stored under `generation`. Otherwise, returns the fresh value.
+    pub(super) fn get(&self, thread: MainThread, generation: Generation) -> T {
+        match self.cell.get(thread) {
+            Some((stamp, value)) if stamp == generation => value,
+            _ => self.fresh,
+        }
+    }
+
+    /// Stores `value` as belonging to `generation`.
+    pub(super) fn set(&self, thread: MainThread, generation: Generation, value: T) {
+        self.cell.set(thread, Some((generation, value)));
+    }
+
+    /// Runs `f` on the current value if it belongs to `generation`. Otherwise, runs `f` on the fresh value.
+    /// If `f` returns `Some(_)`, then modifications to `f`'s input are stored back as the new cell value.
+    /// If `f` returns `None`, then any modifications are discarded and the cell value is left untouched.
+    pub(super) fn update<R>(
+        &self,
+        thread: MainThread,
+        generation: Generation,
+        f: impl FnOnce(&mut T) -> Option<R>,
+    ) -> Option<R> {
+        let mut value = self.get(thread, generation);
+        let r = f(&mut value)?;
+        self.set(thread, generation, value);
+        Some(r)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Generation, LoadHandoff, LoadStatus};
+    use super::{Generation, LoadHandoff, LoadStatus, PerLoad};
+    use crate::thread::MainThread;
+    use crate::thread::test_support::MainClaim;
 
     fn settled(handoff: &LoadHandoff) -> (Generation, bool) {
         match handoff.status() {
@@ -150,5 +199,50 @@ mod tests {
         handoff.enter();
         handoff.publish();
         assert_eq!(settled(&handoff), (Generation::for_test(2), true));
+    }
+
+    #[test]
+    fn per_load_values_scoped_to_generation() {
+        static VALUE: PerLoad<u32> = PerLoad::new(42);
+
+        let _claim = MainClaim::acquire();
+
+        let thread = MainThread::claim();
+        let (g0, g1, g2, g3) = (
+            Generation::for_test(0),
+            Generation::for_test(1),
+            Generation::for_test(2),
+            Generation::for_test(3),
+        );
+
+        // Before any write has occurred, no generation matches, so the fresh value is read.
+        assert_eq!(VALUE.get(thread, g0), 42);
+
+        VALUE.set(thread, g1, 7);
+        assert_eq!(VALUE.get(thread, g1), 7);
+        assert_eq!(VALUE.get(thread, g2), 42);
+        assert_eq!(VALUE.get(thread, g1), 7);
+
+        let x = VALUE.update(thread, g1, |v| {
+            *v *= 2;
+            Some(*v)
+        });
+        assert_eq!(x, Some(14));
+        assert_eq!(VALUE.get(thread, g1), 14);
+
+        let x = VALUE.update(thread, g1, |v| {
+            *v = 99;
+            None::<()>
+        });
+        assert_eq!(x, None);
+        assert_eq!(VALUE.get(thread, g1), 14);
+
+        let x = VALUE.update(thread, g3, |v| {
+            *v += 5;
+            Some(*v)
+        });
+        assert_eq!(x, Some(47));
+        assert_eq!(VALUE.get(thread, g3), 47);
+        assert_eq!(VALUE.get(thread, g1), 42);
     }
 }

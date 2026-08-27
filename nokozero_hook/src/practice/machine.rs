@@ -50,16 +50,6 @@ pub(super) enum TickDecision {
     },
 }
 
-/// Everything that the main thread knows about the reset/load lifecycle.
-/// Transitions are methods that take the environment as parameters and return writes to be performed by the caller.
-pub(super) struct Lifecycle {
-    reset: ResetState,
-    /// The last consumed load.
-    current_load: CurrentLoad,
-    /// The live warp's undo record.
-    last_warp: Option<LiveWarp>,
-}
-
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct ReloadPlan {
     /// `STAGE_SELECT` value when the reset involves a warp with a decodable stage.
@@ -70,6 +60,16 @@ pub(super) struct ReloadPlan {
     pub(super) character: u32,
     /// Whether the upcoming load should take an arm (i.e. whether its first tick applies a warp).
     pub(super) arms_load: bool,
+}
+
+/// Everything that the main thread knows about the reset/load lifecycle.
+/// Transitions are methods that take the environment as parameters and return writes to be performed by the caller.
+pub(super) struct Lifecycle {
+    reset: ResetState,
+    /// The last consumed load.
+    current_load: CurrentLoad,
+    /// The live warp's undo record.
+    last_warp: Option<LiveWarp>,
 }
 
 impl Lifecycle {
@@ -174,11 +174,6 @@ impl Lifecycle {
         }
     }
 
-    /// Returns the live warp's undo slot for reverting and refilling ECL in place.
-    pub(super) fn last_warp_mut(&mut self) -> &mut Option<LiveWarp> {
-        &mut self.last_warp
-    }
-
     /// Transitions from [`ResetState::Reloading`] to [`ResetState::Done`], consuming the new stage load parameters.
     pub(super) fn finish_reload(&mut self, generation: Generation, outcome: Outcome, section: u32) {
         self.consume_load(generation, section);
@@ -192,6 +187,11 @@ impl Lifecycle {
             generation,
             section,
         };
+    }
+
+    /// Returns the live warp's undo slot for reverting and refilling ECL in place.
+    pub(super) fn last_warp_mut(&mut self) -> &mut Option<LiveWarp> {
+        &mut self.last_warp
     }
 
     /// Returns the `(load_generation, reset_seq, reset_outcome, applied_section)` wire values.

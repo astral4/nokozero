@@ -84,13 +84,13 @@ const ST7_BOSS_CREATE_CALL: u32 = 0x93cc;
 const ST7_BS_MOVE_POS_X: u32 = 0x4a8;
 const ST7_BS_MOVE_POS_Y: u32 = 0x4ac;
 const ST7_BS_ANM_SELECT: u32 = 0x57c;
-const ST7_BS_ANM_SELECT2: u32 = 0x6b4;
 const ST7_BS_ANM_SET_MAIN_INS: u32 = 0x584;
 const ST7_BS_ANM_SET_MAIN_ARG2: u32 = 0x594;
 const ST7_BS_SET_SPRITE_INS: u32 = 0x5d8;
+const ST7_BS_MOVE_LIMIT_INS: u32 = 0x644;
 const ST7_BS_ANM_SET_SPRITE1_ARG2: u32 = 0x688;
 const ST7_BS_ANM_SET_SPRITE2_ARG2: u32 = 0x6a0;
-const ST7_BS_MOVE_LIMIT_INS: u32 = 0x644;
+const ST7_BS_ANM_SELECT2: u32 = 0x6b4;
 
 // Offsets for stage scripts. `*_START` is the stage script's entry-jump site.
 // `*_SPELL_START` / `*_SPELL` are each stage's spell practice jump pair.
@@ -336,6 +336,9 @@ enum Op {
         stage: usize,
         ns: Nonspell,
     },
+    St6BossEffect {
+        pos_str: u32,
+    },
     St7BossEntry,
     St7HideSubboss,
     St7EnterSpell {
@@ -346,9 +349,6 @@ enum Op {
     St7Mid {
         health: i32,
         ordinal: i8,
-    },
-    St6BossEffect {
-        pos_str: u32,
     },
 }
 
@@ -395,6 +395,248 @@ pub(super) enum PrimOp<'a> {
     St7Bonus,
 }
 
+impl Op {
+    /// Flattens a stored op to primitive ops.
+    #[expect(clippy::too_many_lines)]
+    fn expand(self, emit: &mut Emit<'_>) {
+        match self {
+            Op::File(n) => emit(PrimOp::File(n)),
+            Op::Pos(p) => emit(PrimOp::Pos(p)),
+            Op::Jump {
+                start,
+                expect,
+                dest,
+                at_frame,
+                ecl_time,
+            } => {
+                emit(PrimOp::Jump {
+                    start,
+                    expect,
+                    dest,
+                    at_frame,
+                    ecl_time,
+                });
+            }
+            Op::SeqAt { pos, expect, words } => emit(PrimOp::SeqAt { pos, expect, words }),
+            Op::Seq { words } => emit(PrimOp::Seq { words }),
+            Op::I16 { at, v } => emit(PrimOp::I16 { at, v }),
+            Op::I32 { at, v } => emit(PrimOp::I32 { at, v }),
+            Op::U32 { at, v } => emit(PrimOp::U32 { at, v }),
+            Op::Skip(n) => emit(PrimOp::Skip(n)),
+            Op::St7Bonus => emit(PrimOp::St7Bonus),
+            Op::BossEntry { stage, skips } => {
+                let (start, dest, file) = BOSS_ENTRIES[stage - 1];
+                // Every `ST*_START` holds an id-0x17 instruction.
+                emit(PrimOp::Jump {
+                    start,
+                    expect: 0x17,
+                    dest,
+                    at_frame: 60,
+                    ecl_time: 0,
+                });
+                emit(PrimOp::File(file));
+                emit(PrimOp::Skip(skips));
+            }
+            Op::EnterSpell {
+                start,
+                dest,
+                at_frame,
+                health,
+                ordinal,
+            } => {
+                // Every `*_SPELL_START` holds an id-0x2a instruction.
+                emit(PrimOp::Jump {
+                    start,
+                    expect: 0x2a,
+                    dest,
+                    at_frame,
+                    ecl_time: 0,
+                });
+                Op::SpellFields {
+                    base: dest,
+                    health,
+                    ordinal,
+                }
+                .expand(emit);
+            }
+            Op::SpellFields {
+                base,
+                health,
+                ordinal,
+            } => {
+                emit(PrimOp::I32 {
+                    at: base + 0x10,
+                    v: health,
+                });
+                emit(PrimOp::I8 {
+                    at: base + 0x30,
+                    v: ordinal,
+                });
+            }
+            Op::Nonspell { stage, ns } => {
+                Op::BossEntry { stage, skips: 2 }.expand(emit);
+                emit(PrimOp::I8 {
+                    at: ns.select.0,
+                    v: ns.select.1,
+                });
+                emit(PrimOp::I16 {
+                    at: ns.item_drops,
+                    v: 0,
+                });
+                emit(PrimOp::I16 {
+                    at: ns.sound_effect,
+                    v: 0,
+                });
+                for &(at, v) in ns.timings {
+                    emit(PrimOp::I32 { at, v });
+                }
+            }
+            Op::St6BossEffect { pos_str } => {
+                emit(PrimOp::SeqAt {
+                    pos: ST6_EFFECT_BLOCK,
+                    expect: 0x2a,
+                    words: &[
+                        0,
+                        0x0014_012e,
+                        0x01ff_0000,
+                        0,
+                        3,
+                        0,
+                        0x0018_012f,
+                        0x02ff_0000,
+                        0,
+                        3,
+                        6,
+                    ],
+                });
+                let tail = [
+                    0,
+                    0x0020_000f,
+                    0x01ff_0000,
+                    0,
+                    0xc,
+                    0x7373_6f42,
+                    pos_str,
+                    0x0000_0073,
+                ];
+                emit(PrimOp::Seq { words: &tail });
+            }
+            Op::St7BossEntry => {
+                emit(PrimOp::Jump {
+                    start: ST7_START,
+                    expect: 0x17,
+                    dest: ST7_BOSS_CREATE_CALL,
+                    at_frame: 60,
+                    ecl_time: 0,
+                });
+                emit(PrimOp::Skip(2));
+                Op::St7HideSubboss.expand(emit);
+            }
+            Op::St7HideSubboss => {
+                for &inner in ST7_HIDE_SUBBOSS {
+                    inner.expand(emit);
+                }
+            }
+            Op::St7EnterSpell {
+                health,
+                ordinal,
+                junko,
+            } => {
+                emit(PrimOp::File(3));
+                let head = [0, 0x0014_01ff, 0x01ff_0000, 0, health];
+                emit(PrimOp::SeqAt {
+                    pos: 0x6d0,
+                    expect: 0x16,
+                    words: &head,
+                });
+                if junko {
+                    emit(PrimOp::Seq {
+                        words: &[
+                            0,
+                            0x0014_012e,
+                            0x01ff_0000,
+                            0,
+                            5,
+                            0,
+                            0x0018_012f,
+                            0x02ff_0000,
+                            0,
+                            3,
+                            6,
+                        ],
+                    });
+                    emit(PrimOp::Seq {
+                        words: &[
+                            0,
+                            0x0020_000f,
+                            0x01ff_0000,
+                            0,
+                            0xc,
+                            0x7373_6f42,
+                            0x6f70_5f34,
+                            0x0000_0073,
+                        ],
+                    });
+                }
+                let card = [
+                    0,
+                    0x0020_000b,
+                    0x01ff_0000,
+                    0,
+                    0xc,
+                    0x7373_6f42,
+                    0x6472_6143,
+                    ordinal,
+                ];
+                emit(PrimOp::Seq { words: &card });
+            }
+            Op::St7Mid { health, ordinal } => {
+                emit(PrimOp::File(2));
+                // invulnerability window
+                emit(PrimOp::SeqAt {
+                    pos: 0x34c,
+                    expect: 0x1f8,
+                    words: &[0, 0x0020_0203, 0x01ff_0000, 0, 60],
+                });
+                // boss movement restriction
+                emit(PrimOp::SeqAt {
+                    pos: 0x37c,
+                    expect: 0x202,
+                    words: &[
+                        0,
+                        0x002c_01f8,
+                        0x04ff_0000,
+                        0,
+                        0,
+                        0x4300_0000,
+                        0x438c_0000,
+                        0x4380_0000,
+                    ],
+                });
+                emit(PrimOp::I16 { at: 0x33c, v: 0 }); // void wait
+                emit(PrimOp::I32 { at: 0x36c, v: 60 }); // wait time
+                emit(PrimOp::I32 { at: 0x328, v: 60 }); // move time
+                // spell practice jump
+                emit(PrimOp::Jump {
+                    start: 0x48c,
+                    expect: 0x203,
+                    dest: 0x508,
+                    at_frame: 0,
+                    ecl_time: 0,
+                });
+                emit(PrimOp::I32 {
+                    at: 0x2fc,
+                    v: health,
+                });
+                emit(PrimOp::I8 {
+                    at: 0x525,
+                    v: ordinal,
+                });
+            }
+        }
+    }
+}
+
 struct Warp {
     section: u32,
     /// Operations applied for every phase.
@@ -423,6 +665,27 @@ impl Warp {
             phase_ops: Some(phase_ops),
         }
     }
+
+    /// Emits the full stream of primitive ops for a named section.
+    fn expand(&self, phase: Phase, emit: &mut Emit<'_>) {
+        for &op in self.ops {
+            op.expand(emit);
+        }
+        if let Some(phase_ops) = self.phase_ops {
+            phase_ops(phase, emit);
+        }
+    }
+}
+
+const fn warp_index(section: u32) -> Option<usize> {
+    let mut i = 0;
+    while i < WARPS.len() {
+        if WARPS[i].section == section {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
 }
 
 const WARPS: &[Warp] = &[
@@ -1873,271 +2136,6 @@ const ST7_HIDE_SUBBOSS: &[Op] = &[
     },
 ];
 
-impl Op {
-    /// Flattens a stored op to primitive ops.
-    #[expect(clippy::too_many_lines)]
-    fn expand(self, emit: &mut Emit<'_>) {
-        match self {
-            Op::File(n) => emit(PrimOp::File(n)),
-            Op::Pos(p) => emit(PrimOp::Pos(p)),
-            Op::Jump {
-                start,
-                expect,
-                dest,
-                at_frame,
-                ecl_time,
-            } => {
-                emit(PrimOp::Jump {
-                    start,
-                    expect,
-                    dest,
-                    at_frame,
-                    ecl_time,
-                });
-            }
-            Op::SeqAt { pos, expect, words } => emit(PrimOp::SeqAt { pos, expect, words }),
-            Op::Seq { words } => emit(PrimOp::Seq { words }),
-            Op::I16 { at, v } => emit(PrimOp::I16 { at, v }),
-            Op::I32 { at, v } => emit(PrimOp::I32 { at, v }),
-            Op::U32 { at, v } => emit(PrimOp::U32 { at, v }),
-            Op::Skip(n) => emit(PrimOp::Skip(n)),
-            Op::St7Bonus => emit(PrimOp::St7Bonus),
-            Op::BossEntry { stage, skips } => {
-                let (start, dest, file) = BOSS_ENTRIES[stage - 1];
-                // Every `ST*_START` holds an id-0x17 instruction.
-                emit(PrimOp::Jump {
-                    start,
-                    expect: 0x17,
-                    dest,
-                    at_frame: 60,
-                    ecl_time: 0,
-                });
-                emit(PrimOp::File(file));
-                emit(PrimOp::Skip(skips));
-            }
-            Op::EnterSpell {
-                start,
-                dest,
-                at_frame,
-                health,
-                ordinal,
-            } => {
-                // Every `*_SPELL_START` holds an id-0x2a instruction.
-                emit(PrimOp::Jump {
-                    start,
-                    expect: 0x2a,
-                    dest,
-                    at_frame,
-                    ecl_time: 0,
-                });
-                Op::SpellFields {
-                    base: dest,
-                    health,
-                    ordinal,
-                }
-                .expand(emit);
-            }
-            Op::SpellFields {
-                base,
-                health,
-                ordinal,
-            } => {
-                emit(PrimOp::I32 {
-                    at: base + 0x10,
-                    v: health,
-                });
-                emit(PrimOp::I8 {
-                    at: base + 0x30,
-                    v: ordinal,
-                });
-            }
-            Op::Nonspell { stage, ns } => {
-                Op::BossEntry { stage, skips: 2 }.expand(emit);
-                emit(PrimOp::I8 {
-                    at: ns.select.0,
-                    v: ns.select.1,
-                });
-                emit(PrimOp::I16 {
-                    at: ns.item_drops,
-                    v: 0,
-                });
-                emit(PrimOp::I16 {
-                    at: ns.sound_effect,
-                    v: 0,
-                });
-                for &(at, v) in ns.timings {
-                    emit(PrimOp::I32 { at, v });
-                }
-            }
-            Op::St7BossEntry => {
-                emit(PrimOp::Jump {
-                    start: ST7_START,
-                    expect: 0x17,
-                    dest: ST7_BOSS_CREATE_CALL,
-                    at_frame: 60,
-                    ecl_time: 0,
-                });
-                emit(PrimOp::Skip(2));
-                Op::St7HideSubboss.expand(emit);
-            }
-            Op::St7HideSubboss => {
-                for &inner in ST7_HIDE_SUBBOSS {
-                    inner.expand(emit);
-                }
-            }
-            Op::St7EnterSpell {
-                health,
-                ordinal,
-                junko,
-            } => {
-                emit(PrimOp::File(3));
-                let head = [0, 0x0014_01ff, 0x01ff_0000, 0, health];
-                emit(PrimOp::SeqAt {
-                    pos: 0x6d0,
-                    expect: 0x16,
-                    words: &head,
-                });
-                if junko {
-                    emit(PrimOp::Seq {
-                        words: &[
-                            0,
-                            0x0014_012e,
-                            0x01ff_0000,
-                            0,
-                            5,
-                            0,
-                            0x0018_012f,
-                            0x02ff_0000,
-                            0,
-                            3,
-                            6,
-                        ],
-                    });
-                    emit(PrimOp::Seq {
-                        words: &[
-                            0,
-                            0x0020_000f,
-                            0x01ff_0000,
-                            0,
-                            0xc,
-                            0x7373_6f42,
-                            0x6f70_5f34,
-                            0x0000_0073,
-                        ],
-                    });
-                }
-                let card = [
-                    0,
-                    0x0020_000b,
-                    0x01ff_0000,
-                    0,
-                    0xc,
-                    0x7373_6f42,
-                    0x6472_6143,
-                    ordinal,
-                ];
-                emit(PrimOp::Seq { words: &card });
-            }
-            Op::St7Mid { health, ordinal } => {
-                emit(PrimOp::File(2));
-                // invulnerability window
-                emit(PrimOp::SeqAt {
-                    pos: 0x34c,
-                    expect: 0x1f8,
-                    words: &[0, 0x0020_0203, 0x01ff_0000, 0, 60],
-                });
-                // boss movement restriction
-                emit(PrimOp::SeqAt {
-                    pos: 0x37c,
-                    expect: 0x202,
-                    words: &[
-                        0,
-                        0x002c_01f8,
-                        0x04ff_0000,
-                        0,
-                        0,
-                        0x4300_0000,
-                        0x438c_0000,
-                        0x4380_0000,
-                    ],
-                });
-                emit(PrimOp::I16 { at: 0x33c, v: 0 }); // void wait
-                emit(PrimOp::I32 { at: 0x36c, v: 60 }); // wait time
-                emit(PrimOp::I32 { at: 0x328, v: 60 }); // move time
-                // spell practice jump
-                emit(PrimOp::Jump {
-                    start: 0x48c,
-                    expect: 0x203,
-                    dest: 0x508,
-                    at_frame: 0,
-                    ecl_time: 0,
-                });
-                emit(PrimOp::I32 {
-                    at: 0x2fc,
-                    v: health,
-                });
-                emit(PrimOp::I8 {
-                    at: 0x525,
-                    v: ordinal,
-                });
-            }
-            Op::St6BossEffect { pos_str } => {
-                emit(PrimOp::SeqAt {
-                    pos: ST6_EFFECT_BLOCK,
-                    expect: 0x2a,
-                    words: &[
-                        0,
-                        0x0014_012e,
-                        0x01ff_0000,
-                        0,
-                        3,
-                        0,
-                        0x0018_012f,
-                        0x02ff_0000,
-                        0,
-                        3,
-                        6,
-                    ],
-                });
-                let tail = [
-                    0,
-                    0x0020_000f,
-                    0x01ff_0000,
-                    0,
-                    0xc,
-                    0x7373_6f42,
-                    pos_str,
-                    0x0000_0073,
-                ];
-                emit(PrimOp::Seq { words: &tail });
-            }
-        }
-    }
-}
-
-impl Warp {
-    /// Emits the full stream of primitive ops for a named section.
-    fn expand(&self, phase: Phase, emit: &mut Emit<'_>) {
-        for &op in self.ops {
-            op.expand(emit);
-        }
-        if let Some(phase_ops) = self.phase_ops {
-            phase_ops(phase, emit);
-        }
-    }
-}
-
-const fn warp_index(section: u32) -> Option<usize> {
-    let mut i = 0;
-    while i < WARPS.len() {
-        if WARPS[i].section == section {
-            return Some(i);
-        }
-        i += 1;
-    }
-    None
-}
-
 /// Chapter-warp entry-jump start offsets for each stage.
 const CHAPTER_STARTS: [u32; 7] = [0x7248, 0x74a0, 0xa280, 0x8634, 0x9f34, 0x91f8, 0x8f94];
 
@@ -2145,10 +2143,10 @@ enum ChapterEffect {
     None,
     /// Defer `ECLSetChapter(n)` via the chapter intent.
     SetChapter(i32),
-    /// Zero an `i32` at this file offset.
-    ZeroI32(u32),
     /// Zero an `i16` at this file offset.
     ZeroI16(u32),
+    /// Zero an `i32` at this file offset.
+    ZeroI32(u32),
 }
 
 struct ChapterWarp {
@@ -2279,8 +2277,8 @@ fn expand_chapter(stage: u32, portion: u32, emit: &mut Emit<'_>) -> bool {
     match row.effect {
         ChapterEffect::None => {}
         ChapterEffect::SetChapter(n) => emit(PrimOp::SetChapter(n)),
-        ChapterEffect::ZeroI32(at) => emit(PrimOp::I32 { at, v: 0 }),
         ChapterEffect::ZeroI16(at) => emit(PrimOp::I16 { at, v: 0 }),
+        ChapterEffect::ZeroI32(at) => emit(PrimOp::I32 { at, v: 0 }),
     }
     true
 }
