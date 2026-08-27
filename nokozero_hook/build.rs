@@ -29,8 +29,8 @@ fn main() {
 
 fn parse_bool(s: &str) -> Option<bool> {
     match s.to_ascii_lowercase().as_str() {
-        "1" | "true" | "on" | "yes" => Some(true),
-        "0" | "false" | "off" | "no" => Some(false),
+        "1" | "true" => Some(true),
+        "0" | "false" => Some(false),
         _ => None,
     }
 }
