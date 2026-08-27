@@ -18,6 +18,8 @@ pub(crate) enum Outcome {
     /// A reset asked to restart the live stage at an invalid difficulty.
     /// (For example, Extra stage segments only exist on the Extra difficulty.)
     FailedDifficultyMismatch = 6,
+    /// A reset specified a character other than the one currently being used.
+    FailedCharacterMismatch = 7,
 }
 
 #[derive(Clone, Copy)]
@@ -56,8 +58,6 @@ pub(super) struct ReloadPlan {
     pub(super) stage_select: Option<u32>,
     /// `DIFFICULTY` value.
     pub(super) difficulty: u32,
-    /// `CHARACTER` value.
-    pub(super) character: u32,
     /// Whether the upcoming load should take an arm (i.e. whether its first tick applies a warp).
     pub(super) arms_load: bool,
 }
@@ -115,6 +115,7 @@ impl Lifecycle {
         status: LoadStatus,
         loader_running: bool,
         current_stage: u32,
+        current_character: u32,
     ) -> Option<ReloadPlan> {
         let ResetState::Requested { seq, params } = self.reset else {
             return None;
@@ -128,6 +129,14 @@ impl Lifecycle {
                 }
             };
         if !stable_ingame || load_window_open {
+            return None;
+        }
+
+        if params.character != current_character {
+            self.reset = ResetState::Done {
+                seq,
+                outcome: Outcome::FailedCharacterMismatch,
+            };
             return None;
         }
 
@@ -146,7 +155,6 @@ impl Lifecycle {
                 .then(|| section_stage(params.section))
                 .flatten(),
             difficulty: params.difficulty,
-            character: params.character,
             arms_load: params.active,
         })
     }
@@ -220,6 +228,7 @@ mod tests {
     use super::{Generation, Lifecycle, LiveWarp, LoadStatus, Outcome, ReloadPlan, TickDecision};
 
     const LIVE_STAGE: u32 = 1;
+    const LIVE_CHARACTER: u32 = 0;
 
     fn settled(generation: u32) -> LoadStatus {
         LoadStatus::Settled {
@@ -242,7 +251,7 @@ mod tests {
         assert!(lc.accept(5, params(1202, 1, 0)));
         assert_eq!(lc.wire(), (Generation::for_test(0), 5, Outcome::Pending, 0));
         assert!(
-            lc.try_start_reload(true, settled(0), false, LIVE_STAGE)
+            lc.try_start_reload(true, settled(0), false, LIVE_STAGE, LIVE_CHARACTER)
                 .is_some()
         );
         assert_eq!(lc.wire(), (Generation::for_test(0), 5, Outcome::Pending, 0));
@@ -259,7 +268,7 @@ mod tests {
         assert!(lc.accept(1, params(1202, 1, 0)));
         assert!(!lc.accept(2, params(1202, 1, 0)));
         assert!(
-            lc.try_start_reload(true, settled(0), false, LIVE_STAGE)
+            lc.try_start_reload(true, settled(0), false, LIVE_STAGE, LIVE_CHARACTER)
                 .is_some()
         );
         assert!(!lc.accept(3, params(1202, 1, 0)));
@@ -272,30 +281,35 @@ mod tests {
         let mut lc = Lifecycle::INIT;
         assert!(lc.accept(1, params(1202, 1, 0)));
         assert!(
-            lc.try_start_reload(false, settled(0), false, LIVE_STAGE)
+            lc.try_start_reload(false, settled(0), false, LIVE_STAGE, LIVE_CHARACTER)
                 .is_none()
         );
         assert!(
-            lc.try_start_reload(true, LoadStatus::InFlight, false, LIVE_STAGE)
+            lc.try_start_reload(
+                true,
+                LoadStatus::InFlight,
+                false,
+                LIVE_STAGE,
+                LIVE_CHARACTER
+            )
+            .is_none()
+        );
+        assert!(
+            lc.try_start_reload(true, settled(0), true, LIVE_STAGE, LIVE_CHARACTER)
                 .is_none()
         );
         assert!(
-            lc.try_start_reload(true, settled(0), true, LIVE_STAGE)
-                .is_none()
-        );
-        assert!(
-            lc.try_start_reload(true, settled(1), false, LIVE_STAGE)
+            lc.try_start_reload(true, settled(1), false, LIVE_STAGE, LIVE_CHARACTER)
                 .is_none()
         );
         let plan = lc
-            .try_start_reload(true, settled(0), false, LIVE_STAGE)
+            .try_start_reload(true, settled(0), false, LIVE_STAGE, LIVE_CHARACTER)
             .expect("reload starts");
         assert_eq!(
             plan,
             ReloadPlan {
                 stage_select: Some(1),
                 difficulty: 3,
-                character: 0,
                 arms_load: true,
             }
         );
@@ -306,14 +320,13 @@ mod tests {
         let mut lc = Lifecycle::INIT;
         assert!(lc.accept(1, params(0, 0, 0)));
         let plan = lc
-            .try_start_reload(true, settled(0), false, LIVE_STAGE)
+            .try_start_reload(true, settled(0), false, LIVE_STAGE, LIVE_CHARACTER)
             .expect("reload starts");
         assert_eq!(
             plan,
             ReloadPlan {
                 stage_select: None,
                 difficulty: 3,
-                character: 0,
                 arms_load: false,
             }
         );
@@ -336,7 +349,7 @@ mod tests {
         let mut lc = Lifecycle::INIT;
         assert!(lc.accept(1, params(1202, 1, 0)));
         assert!(
-            lc.try_start_reload(true, settled(0), false, LIVE_STAGE)
+            lc.try_start_reload(true, settled(0), false, LIVE_STAGE, LIVE_CHARACTER)
                 .is_some()
         );
         lc.observe(settled_armed(1));
@@ -369,7 +382,7 @@ mod tests {
 
         assert!(lc.accept(1, params(1202, 1, 0)));
         assert!(
-            lc.try_start_reload(true, settled(1), false, LIVE_STAGE)
+            lc.try_start_reload(true, settled(1), false, LIVE_STAGE, LIVE_CHARACTER)
                 .is_some()
         );
         lc.observe(settled(2));
@@ -384,7 +397,7 @@ mod tests {
         let mut lc = Lifecycle::INIT;
         assert!(lc.accept(1, params(1202, 1, 0)));
         assert!(
-            lc.try_start_reload(true, settled(0), false, LIVE_STAGE)
+            lc.try_start_reload(true, settled(0), false, LIVE_STAGE, LIVE_CHARACTER)
                 .is_some()
         );
         assert!(matches!(
@@ -405,7 +418,7 @@ mod tests {
         let mut lc = Lifecycle::INIT;
         assert!(lc.accept(1, params(0, 0, 0)));
         assert!(
-            lc.try_start_reload(true, settled(0), false, EXTRA_STAGE)
+            lc.try_start_reload(true, settled(0), false, EXTRA_STAGE, LIVE_CHARACTER)
                 .is_none()
         );
         assert_eq!(
@@ -420,16 +433,47 @@ mod tests {
         assert!(matches!(lc.tick_decision(settled(0)), TickDecision::Run));
         assert!(lc.accept(2, params_at(0, 0, 0, EXTRA_DIFFICULTY.cast_signed())));
         assert!(
-            lc.try_start_reload(true, settled(0), false, EXTRA_STAGE)
+            lc.try_start_reload(true, settled(0), false, EXTRA_STAGE, LIVE_CHARACTER)
                 .is_some()
         );
 
         let mut lc = Lifecycle::INIT;
         assert!(lc.accept(1, params_at(0, 0, 0, EXTRA_DIFFICULTY.cast_signed())));
         assert!(
-            lc.try_start_reload(true, settled(0), false, LIVE_STAGE)
+            lc.try_start_reload(true, settled(0), false, LIVE_STAGE, LIVE_CHARACTER)
                 .is_none()
         );
         assert_eq!(lc.wire().2, Outcome::FailedDifficultyMismatch);
+    }
+
+    #[test]
+    fn refuse_reload_for_invalid_character() {
+        let mut lc = Lifecycle::INIT;
+        assert!(lc.accept(9, params(1202, 1, 0)));
+        assert!(
+            lc.try_start_reload(true, settled(0), false, LIVE_STAGE, LIVE_CHARACTER + 1)
+                .is_none()
+        );
+
+        let mut early = Lifecycle::INIT;
+        assert!(early.accept(9, params(1202, 1, 0)));
+        assert!(
+            early
+                .try_start_reload(false, settled(0), false, LIVE_STAGE, LIVE_CHARACTER + 1)
+                .is_none()
+        );
+        assert_eq!(
+            early.wire(),
+            (Generation::for_test(0), 9, Outcome::Pending, 0)
+        );
+        assert_eq!(
+            lc.wire(),
+            (
+                Generation::for_test(0),
+                9,
+                Outcome::FailedCharacterMismatch,
+                0
+            )
+        );
     }
 }

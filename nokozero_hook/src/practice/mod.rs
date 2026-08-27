@@ -44,7 +44,7 @@ pub(crate) struct PracticeParams {
     phase: u32,
     /// The difficulty (0-4) applied at the reset. 4 = Extra.
     difficulty: u32,
-    /// The character (0-3) applied at the reset.
+    /// The character (0–3) required by the reset.
     character: u32,
     score: i64,
     graze: i32,
@@ -189,7 +189,6 @@ pub(crate) fn apply_pending_reset(token: MainToken) {
     }
     unsafe {
         write(token, DIFFICULTY_VA, plan.difficulty);
-        write(token, CHARACTER_VA, plan.character);
         write(token, GAMEMODE_TO_SWITCH_TO_VA, GAMEMODE_RETRY);
     }
 }
@@ -200,8 +199,15 @@ fn try_start_reload(thread: MainThread, stable_ingame: bool) -> Option<ReloadPla
     let status = HANDOFF.status();
     let loader_running = unsafe { read::<u32>(LOADER_RUNNING_VA) } == 1;
     let current_stage = unsafe { read::<u32>(STAGE_CURRENT_VA) };
+    let current_character = unsafe { read::<u32>(CHARACTER_VA) };
     with_lifecycle(thread, |lc| {
-        lc.try_start_reload(stable_ingame, status, loader_running, current_stage)
+        lc.try_start_reload(
+            stable_ingame,
+            status,
+            loader_running,
+            current_stage,
+            current_character,
+        )
     })
 }
 
