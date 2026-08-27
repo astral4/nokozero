@@ -4,7 +4,7 @@ use crate::InputFlags;
 use crate::TAP_INTERVAL;
 use crate::addrs::MAIN_MENU_PTR_VA;
 use crate::features::Scene;
-use crate::mem::read;
+use crate::mem::{read, read_ptr};
 use crate::patch::BranchSite;
 use crate::thread::{MainCell, MainThread};
 
@@ -67,10 +67,7 @@ impl MenuView {
     fn classify(_thread: MainThread) -> Option<Self> {
         // SAFETY: The menu object is created and destroyed on this thread,
         // so a non-null pointer read here stays valid for the rest of the tick.
-        let base = unsafe { read::<u32>(MAIN_MENU_PTR_VA) } as usize;
-        if base == 0 {
-            return None;
-        }
+        let base = unsafe { read_ptr(MAIN_MENU_PTR_VA) }?;
         let screen = match unsafe { read::<u32>(base + MENU_ID_OFFSET) } {
             MENU_BOOTING => Some(Screen::Booting),
             MENU_TITLE => Some(Screen::Title),
