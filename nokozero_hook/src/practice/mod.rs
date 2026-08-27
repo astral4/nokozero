@@ -221,8 +221,16 @@ const GT_TICK: Site<6> = Site::new(
 );
 static GT_TICK_CONTINUE_VA: u32 = GT_TICK.after();
 
-const RUN_TICK: u32 = 0;
-const SKIP_TICK: u32 = 1;
+/// A detour handler's decision, returned to its naked trampoline in `eax`.
+/// The trampolines run `test eax, eax`, so the return type must define all 32 bits of the register —
+/// hence a `#[repr(u32)]` enum rather than `bool` (which would only define `al`).
+#[repr(u32)]
+enum Verdict {
+    /// Fall through into the displaced original path.
+    Run = 0,
+    /// Divert from the original path (suppress the death, hold the tick, skip the scoring).
+    Divert = 1,
+}
 
 // Runs on every `GameThread::on_tick`.
 #[unsafe(naked)]
@@ -250,14 +258,14 @@ unsafe extern "C" fn gt_tick_trampoline() -> ! {
     )
 }
 
-/// Returns whether the guard is holding this tick back.
-extern "C" fn on_gt_tick() -> u32 {
+/// Returns [`Verdict::Divert`] while the guard is holding this tick back.
+extern "C" fn on_gt_tick() -> Verdict {
     let thread = MainThread::current();
     let status = HANDOFF.status();
     let mut lc = take_lifecycle(thread);
     let run = guard_tick(thread, &mut lc, status);
     put_lifecycle(thread, lc);
-    if run { RUN_TICK } else { SKIP_TICK }
+    if run { Verdict::Run } else { Verdict::Divert }
 }
 
 fn guard_tick(thread: MainThread, lc: &mut Lifecycle, status: LoadStatus) -> bool {

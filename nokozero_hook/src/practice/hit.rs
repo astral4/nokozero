@@ -1,5 +1,6 @@
 //! Logic and hooking for the player death sequence.
 
+use super::Verdict;
 use super::load::{Generation, load_generation};
 use crate::ipc::is_connected;
 use crate::patch::Site;
@@ -67,10 +68,10 @@ unsafe extern "C" fn player_die_trampoline() -> ! {
     )
 }
 
-/// Returning `1` suppresses the player death sequence. Returning `0` lets it run.
-extern "C" fn on_player_die() -> u32 {
+/// Returns [`Verdict::Divert`] to suppress the player death sequence.
+extern "C" fn on_player_die() -> Verdict {
     if !is_connected() {
-        return 0;
+        return Verdict::Run;
     }
     let thread = MainThread::current();
     let generation = load_generation();
@@ -82,5 +83,5 @@ extern "C" fn on_player_die() -> u32 {
     if first_hit == Some(true) {
         FORCED_STEP_OWED.set(thread, generation, true);
     }
-    1
+    Verdict::Divert
 }

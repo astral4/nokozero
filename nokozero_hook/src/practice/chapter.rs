@@ -1,5 +1,6 @@
 //! Patches for chapter semantics and state.
 
+use super::Verdict;
 use super::catalog::ChapterIntent;
 use super::load::{Generation, load_generation};
 use crate::addrs::{CURRENT_CHAPTER_VA, ENEMIES_SPAWNED_IN_CHAPTER_VA};
@@ -75,8 +76,8 @@ unsafe extern "C" fn chapter_score_trampoline() -> ! {
     )
 }
 
-/// Returns `1` to suppress the current chapter-end event's completion scoring. Returns `0` to let it run.
-extern "C" fn on_chapter_score() -> u32 {
+/// Returns [`Verdict::Divert`] to suppress the current chapter-end event's completion scoring.
+extern "C" fn on_chapter_score() -> Verdict {
     let thread = MainThread::current();
     let suppressed = SCHEDULED_INTENT.update(thread, load_generation(), |intent| {
         if intent.skip_remaining == 0 {
@@ -86,7 +87,11 @@ extern "C" fn on_chapter_score() -> u32 {
             Some(())
         }
     });
-    u32::from(suppressed.is_some())
+    if suppressed.is_some() {
+        Verdict::Divert
+    } else {
+        Verdict::Run
+    }
 }
 
 const CHAPTER_SET: Site<6> = Site::new(
