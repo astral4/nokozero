@@ -209,9 +209,8 @@ extern "system" fn DllMain(h_module: HINSTANCE, reason: u32, _reserved: *mut c_v
         unsafe { DisableThreadLibraryCalls(h_module as HMODULE) };
 
         let config = Config::from_env();
-        headless::init(config.headless);
         menu::init(config.character);
-        unsafe { install() };
+        unsafe { install(config.headless) };
         ipc::init(config.connect_addr);
     }
     1
@@ -221,7 +220,7 @@ extern "system" fn DllMain(h_module: HINSTANCE, reason: u32, _reserved: *mut c_v
 ///
 /// The game image must be loaded at its fixed base. This function must be called during `DLL_PROCESS_ATTACH`,
 /// before the game's entry point runs.
-unsafe fn install() {
+unsafe fn install(headless: bool) {
     unsafe {
         // Lets multiple game instances run in parallel.
         const {
@@ -239,7 +238,7 @@ unsafe fn install() {
 
         dialog::install(game);
 
-        if headless::is_enabled() {
+        if headless {
             headless::install(game);
         }
     }

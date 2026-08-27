@@ -2,11 +2,12 @@
 
 use crate::addrs::MAIN_MENU_PTR_VA;
 use crate::features::Scene;
+use crate::log::fatal;
 use crate::mem::{read, read_ptr};
 use crate::patch::BranchSite;
 use crate::thread::{MainCell, MainThread};
 use crate::{InputFlags, TAP_INTERVAL};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::OnceLock;
 
 const MENU_ID_OFFSET: usize = 0x18;
 // 2 = interactive (input is honored)
@@ -26,11 +27,11 @@ const MENU_PRACTICE_STAGE: u32 = 9;
 const TITLE_PRACTICE_START: u32 = 2;
 
 /// The selected character.
-static CHARACTER: AtomicU32 = AtomicU32::new(0);
+static CHARACTER: OnceLock<u32> = OnceLock::new();
 
 /// This should be called during `DLL_PROCESS_ATTACH`, before [`install`].
 pub(crate) fn init(character: u32) {
-    CHARACTER.store(character, Ordering::Relaxed);
+    let _ = CHARACTER.set(character);
 }
 
 /// Call once during `DLL_PROCESS_ATTACH`.
@@ -112,10 +113,11 @@ impl MenuView {
                 }
             }
             Some(Screen::Character) => {
+                let Some(&character) = CHARACTER.get() else {
+                    fatal!("the character-select screen was reached before the character was set");
+                };
                 // SAFETY: `self.base` was non-null when classified this tick; see `MenuView::classify`.
-                if unsafe { read::<u32>(self.base + MENU_CURSOR_OFFSET) }
-                    == CHARACTER.load(Ordering::Relaxed)
-                {
+                if unsafe { read::<u32>(self.base + MENU_CURSOR_OFFSET) } == character {
                     InputFlags::SHOOT
                 } else {
                     InputFlags::RIGHT
