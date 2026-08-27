@@ -468,9 +468,7 @@ fn get_lasers(lasers_ptr: GamePtr, lasers: &mut Lasers) {
                         }
                     }
                 }
-                _ => {
-                    fatal!("unexpected laser type {laser_type}");
-                }
+                _ => fatal!("unexpected laser type {laser_type}"),
             }
         }
     }
