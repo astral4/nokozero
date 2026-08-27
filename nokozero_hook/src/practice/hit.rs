@@ -1,8 +1,8 @@
 //! Logic and hooking for the player death sequence.
 
+use super::load::{Generation, load_generation};
 use crate::ipc::is_connected;
 use crate::patch::Site;
-use crate::practice::{Generation, load_generation};
 use crate::thread::{MainThread, PerLoad};
 use std::arch::naked_asm;
 use std::mem::take;
@@ -21,7 +21,7 @@ static HITS: PerLoad<u32> = PerLoad::new(0);
 static FORCED_STEP_OWED: PerLoad<bool> = PerLoad::new(false);
 
 /// Returns the number of hits for the stage associated with `generation`.
-pub(crate) fn count(thread: MainThread, generation: Generation) -> u32 {
+pub(super) fn count(thread: MainThread, generation: Generation) -> u32 {
     HITS.get(thread, generation)
 }
 
@@ -37,7 +37,7 @@ pub(crate) fn take_forced_step(thread: MainThread) -> bool {
 ///
 /// The game image must be loaded at its fixed base. This function must be called during `DLL_PROCESS_ATTACH`,
 /// before the game's entry point runs.
-pub(crate) unsafe fn install() {
+pub(super) unsafe fn install() {
     unsafe {
         PLAYER_DIE.jmp(player_die_trampoline as *mut ());
     }

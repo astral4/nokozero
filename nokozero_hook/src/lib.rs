@@ -11,7 +11,6 @@ mod dinput8;
 mod env;
 mod features;
 mod headless;
-mod hit;
 mod iat;
 mod ipc;
 mod mem;
@@ -24,12 +23,13 @@ mod thread;
 use crate::addrs::{GAMEMODE_INGAME, GAMEMODE_MENU, GAMEMODE_VA, GUI_PTR_VA};
 use crate::features::{Meta, Scene, build as build_features};
 use crate::headless::init_from_env;
-use crate::hit::take_forced_step;
 use crate::ipc::{Command, ObsFrame, is_connected, step};
 use crate::mem::{game_live, read, read_ptr};
 use crate::menu::navigate;
 use crate::patch::{CallSite, NearBranchSite};
-use crate::practice::{WireMeta, accept_reset, apply_pending_reset, observe_loads};
+use crate::practice::{
+    WireMeta, accept_reset, apply_pending_reset, observe_loads, take_forced_step,
+};
 use crate::reader::{GameState, Resources};
 use crate::thread::{MainCell, MainThread, MainToken};
 use bitflags::bitflags;
@@ -232,7 +232,6 @@ unsafe fn install() {
 
         practice::install();
         menu::install();
-        hit::install();
 
         let game = GetModuleHandleA(null());
 

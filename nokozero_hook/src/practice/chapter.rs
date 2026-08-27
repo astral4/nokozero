@@ -1,8 +1,7 @@
 //! Patches for chapter semantics and state.
 
 use super::catalog::ChapterIntent;
-use super::load::Generation;
-use super::load_generation;
+use super::load::{Generation, load_generation};
 use crate::addrs::{CURRENT_CHAPTER_VA, ENEMIES_SPAWNED_IN_CHAPTER_VA};
 use crate::mem::write;
 use crate::patch::Site;

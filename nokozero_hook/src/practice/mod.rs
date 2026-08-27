@@ -1,19 +1,22 @@
-//! Practice navigation, stage-load interception, resource injection, and ECL section patching.
+//! Practice navigation, stage-load interception, resource injection, ECL section patching, and death suppression.
 
 mod catalog;
 mod chapter;
 mod data;
 mod ecl;
+mod hit;
 mod load;
 #[forbid(unsafe_code)]
 mod machine;
 
-pub(crate) use crate::practice::load::{Generation, load_generation};
+pub(crate) use crate::practice::hit::take_forced_step;
+pub(crate) use crate::practice::load::Generation;
 pub(crate) use crate::practice::machine::Outcome;
 
 use crate::practice::catalog::apply_section;
 use crate::practice::data::{EXTRA_DIFFICULTY, rank_matches_stage, section_mapped, section_stage};
 use crate::practice::ecl::{Ecl, EclUndo};
+use crate::practice::hit::count;
 use crate::practice::load::{HANDOFF, LoadStatus};
 use crate::practice::machine::{Lifecycle, ReloadPlan, TickDecision};
 
@@ -22,7 +25,6 @@ use crate::addrs::{
     GAMEMODE_TO_SWITCH_TO_VA, GRAZE_VA, GUI_PTR_VA, LIFE_FRAGMENTS_VA, LIVES_VA, LOADER_RUNNING_VA,
     POWER_VA, SCORE_DIV10_VA, STAGE_CURRENT_VA, STAGE_SELECT_VA, VALUE_VA,
 };
-use crate::hit::count;
 use crate::mem::{read, stage_stable, write};
 use crate::patch::{NearBranchSite, Site, op_abs32};
 use crate::thread::{MainCell, MainThread, MainToken};
@@ -434,6 +436,7 @@ pub(crate) unsafe fn install() {
         .apply();
         GT_TICK.jmp(gt_tick_trampoline as *mut ());
         chapter::install();
+        hit::install();
     }
 }
 
