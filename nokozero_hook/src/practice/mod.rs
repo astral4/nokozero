@@ -9,6 +9,7 @@ mod load;
 #[forbid(unsafe_code)]
 mod machine;
 
+pub(crate) use crate::practice::data::MAX_CHARACTER;
 pub(crate) use crate::practice::hit::take_forced_step;
 pub(crate) use crate::practice::load::Generation;
 pub(crate) use crate::practice::machine::Outcome;
@@ -92,7 +93,7 @@ impl PracticeParams {
         ) else {
             return None;
         };
-        if difficulty > EXTRA_DIFFICULTY || character > 3 {
+        if difficulty > EXTRA_DIFFICULTY || character > MAX_CHARACTER {
             return None;
         }
 

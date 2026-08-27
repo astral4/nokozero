@@ -6,6 +6,7 @@ use crate::mem::{read, read_ptr};
 use crate::patch::BranchSite;
 use crate::thread::{MainCell, MainThread};
 use crate::{InputFlags, TAP_INTERVAL};
+use std::sync::atomic::{AtomicU32, Ordering};
 
 const MENU_ID_OFFSET: usize = 0x18;
 // 2 = interactive (input is honored)
@@ -23,6 +24,14 @@ const MENU_PRACTICE_STAGE: u32 = 9;
 
 /// The title menu cursor index (0 = Game Start, 1 = Extra Start, 2 = Practice, etc.).
 const TITLE_PRACTICE_START: u32 = 2;
+
+/// The selected character.
+static CHARACTER: AtomicU32 = AtomicU32::new(0);
+
+/// This should be called during `DLL_PROCESS_ATTACH`, before [`install`].
+pub(crate) fn init(character: u32) {
+    CHARACTER.store(character, Ordering::Relaxed);
+}
 
 /// Call once during `DLL_PROCESS_ATTACH`.
 ///
@@ -102,9 +111,17 @@ impl MenuView {
                     InputFlags::DOWN
                 }
             }
-            Some(Screen::Difficulty | Screen::Character | Screen::PracticeStage) => {
-                InputFlags::SHOOT
+            Some(Screen::Character) => {
+                // SAFETY: `self.base` was non-null when classified this tick; see `MenuView::classify`.
+                if unsafe { read::<u32>(self.base + MENU_CURSOR_OFFSET) }
+                    == CHARACTER.load(Ordering::Relaxed)
+                {
+                    InputFlags::SHOOT
+                } else {
+                    InputFlags::RIGHT
+                }
             }
+            Some(Screen::Difficulty | Screen::PracticeStage) => InputFlags::SHOOT,
             None => InputFlags::BOMB,
         }
     }

@@ -210,6 +210,7 @@ extern "system" fn DllMain(h_module: HINSTANCE, reason: u32, _reserved: *mut c_v
 
         let config = Config::from_env();
         headless::init(config.headless);
+        menu::init(config.character);
         unsafe { install() };
         ipc::init(config.connect_addr);
     }

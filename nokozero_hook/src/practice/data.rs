@@ -202,6 +202,8 @@ enum SectionId {
 const STAGES: u32 = 7;
 pub(super) const EXTRA_STAGE: u32 = 7;
 pub(super) const EXTRA_DIFFICULTY: u32 = 4;
+/// The highest selectable character index.
+pub(crate) const MAX_CHARACTER: u32 = 3;
 
 impl SectionId {
     const fn classify(section: u32) -> Self {
