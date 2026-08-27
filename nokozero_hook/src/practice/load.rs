@@ -102,7 +102,7 @@ impl LoadHandoff {
 }
 
 /// Returns the generation of the latest published load.
-pub(crate) fn load_generation() -> Generation {
+pub(super) fn load_generation() -> Generation {
     Generation(HANDOFF.counter.load(Ordering::Relaxed) / 2)
 }
 
