@@ -320,8 +320,9 @@ impl Iterator for LaserList {
 fn get_bullets(bullets_ptr: GamePtr, bullets: &mut Vec<Bullet>) {
     let head = unsafe { bullets_ptr.byte_add(BULLETS_LIST) };
     for data in List::new(Some(head)) {
-        let is_active = unsafe { data.read::<u16>(BULLET_STATE) } == 1;
-        if !is_active {
+        let state = unsafe { data.read::<u16>(BULLET_STATE) };
+        let is_lethal = state == 1 || state == 2;
+        if !is_lethal {
             continue;
         }
 
