@@ -335,17 +335,12 @@ unsafe fn apply_warp(
     };
 
     let intent = unsafe { apply_section(&mut ecl, params.section, params.phase) };
-    let result = if let Some(intent) = intent {
-        intent.schedule(token.thread(), generation);
-        (Outcome::Applied, params.section)
-    } else {
-        (Outcome::FailedUnmapped, 0)
-    };
+    intent.schedule(token.thread(), generation);
     *last_warp = Some(LiveWarp {
         stage,
         undo: ecl.take_undo(),
     });
-    result
+    (Outcome::Applied, params.section)
 }
 
 /// Writes the reset's starting resources.

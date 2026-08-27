@@ -145,7 +145,7 @@ const _: () = assert!(
 );
 
 #[derive(Clone, Copy)]
-pub(super) enum Phase {
+enum Phase {
     /// For sections without phases. The wire value must be `0`.
     None,
     /// `ST5_MID1` with the wave to start at. `0` = the default wave.
@@ -160,7 +160,7 @@ pub(super) enum Phase {
 
 impl Phase {
     /// Returns `None` if `phase` is not a valid value for the provided section.
-    pub(super) const fn parse(section: u32, phase: u32) -> Option<Self> {
+    const fn parse(section: u32, phase: u32) -> Option<Self> {
         let resolved = match section {
             ST5_MID1 if phase as usize <= ST5_WAVE_DESTS.len() => Self::Wave(phase),
             ST6_BOSS11 if phase as usize <= ST6_BOSS11_HEALTH.len() => Self::Health(phase),
@@ -194,7 +194,7 @@ const fn s10_start_index(digit: u32) -> Option<usize> {
     }
 }
 
-pub(super) enum SectionId {
+enum SectionId {
     Chapter { stage: u32, portion: u32 },
     Named { stage: u32 },
 }
@@ -204,7 +204,7 @@ pub(super) const EXTRA_STAGE: u32 = 7;
 pub(super) const EXTRA_DIFFICULTY: u32 = 4;
 
 impl SectionId {
-    pub(super) const fn classify(section: u32) -> Self {
+    const fn classify(section: u32) -> Self {
         if section >= 10000 && section < 20000 {
             Self::Chapter {
                 stage: (section - 10000) / 100,
@@ -234,16 +234,24 @@ pub(super) const fn section_stage(section: u32) -> Option<u32> {
 }
 
 /// Returns whether the provided `section` and `phase` correspond to a dispatchable warp.
-pub(super) const fn section_mapped(section: u32, phase: u32) -> bool {
-    if Phase::parse(section, phase).is_none() {
+pub(super) fn section_mapped(section: u32, phase: u32) -> bool {
+    expand_section(section, phase, &mut |_| {})
+}
+
+/// Emits the full op stream for `(section, phase)` into `emit`. Returns whether the pair mapped. `false` means nothing was emitted.
+pub(super) fn expand_section(section: u32, phase: u32, emit: &mut Emit<'_>) -> bool {
+    let Some(phase) = Phase::parse(section, phase) else {
         return false;
-    }
+    };
     match SectionId::classify(section) {
-        SectionId::Chapter { stage, portion } => match ChapterDispatch::classify(stage, portion) {
-            ChapterDispatch::StageStart | ChapterDispatch::Warp(_) => true,
-            ChapterDispatch::Unmapped => false,
+        SectionId::Chapter { stage, portion } => expand_chapter(stage, portion, emit),
+        SectionId::Named { .. } => match warp_index(section) {
+            Some(index) => {
+                WARPS[index].expand(phase, emit);
+                true
+            }
+            None => false,
         },
-        SectionId::Named { .. } => warp_index(section).is_some(),
     }
 }
 
@@ -387,7 +395,7 @@ pub(super) enum PrimOp<'a> {
     St7Bonus,
 }
 
-pub(super) struct Warp {
+struct Warp {
     section: u32,
     /// Operations applied for every phase.
     ops: &'static [Op],
@@ -417,7 +425,7 @@ impl Warp {
     }
 }
 
-pub(super) const WARPS: &[Warp] = &[
+const WARPS: &[Warp] = &[
     Warp::new(
         ST1_MID1,
         &[
@@ -2109,7 +2117,7 @@ impl Op {
 
 impl Warp {
     /// Emits the full stream of primitive ops for a named section.
-    pub(super) fn expand(&self, phase: Phase, emit: &mut Emit<'_>) {
+    fn expand(&self, phase: Phase, emit: &mut Emit<'_>) {
         for &op in self.ops {
             op.expand(emit);
         }
@@ -2119,7 +2127,7 @@ impl Warp {
     }
 }
 
-pub(super) const fn warp_index(section: u32) -> Option<usize> {
+const fn warp_index(section: u32) -> Option<usize> {
     let mut i = 0;
     while i < WARPS.len() {
         if WARPS[i].section == section {
@@ -2245,7 +2253,7 @@ impl ChapterDispatch {
 
 /// Emits the full stream of primitive ops for a chapter warp.
 /// Returns whether the stage and portion mapped to a valid chapter warp. `false` means nothing was emitted.
-pub(super) fn expand_chapter(stage: u32, portion: u32, emit: &mut Emit<'_>) -> bool {
+fn expand_chapter(stage: u32, portion: u32, emit: &mut Emit<'_>) -> bool {
     let row = match ChapterDispatch::classify(stage, portion) {
         ChapterDispatch::StageStart => return true,
         ChapterDispatch::Warp(row) => row,

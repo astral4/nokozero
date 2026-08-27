@@ -1,6 +1,6 @@
 //! Dispatch and interpreter over live ECL buffers.
 
-use super::data::{Phase, PrimOp, SectionId, WARPS, expand_chapter, warp_index};
+use super::data::{PrimOp, expand_section};
 use super::ecl::Ecl;
 
 /// Chapter effects requested by the dispatched section.
@@ -54,28 +54,17 @@ unsafe fn apply_op(ecl: &mut Ecl, intent: &mut ChapterIntent, op: PrimOp<'_>) {
 }
 
 /// Applies the warp corresponding to the provided `section` and `phase`. Returns the chapter effects to execute.
-/// `None` means the section and phase didn't match a warp, and nothing was patched.
 ///
 /// # Safety
 ///
 /// A stage must be loaded and `ecl` must be newly created for this stage load.
-pub(super) unsafe fn apply_section(
-    ecl: &mut Ecl,
-    section: u32,
-    phase: u32,
-) -> Option<ChapterIntent> {
-    let phase = Phase::parse(section, phase)?;
+pub(super) unsafe fn apply_section(ecl: &mut Ecl, section: u32, phase: u32) -> ChapterIntent {
     let mut intent = ChapterIntent::default();
-    let mut emit = |op: PrimOp<'_>| {
-        unsafe { apply_op(ecl, &mut intent, op) };
-    };
-    let mapped = match SectionId::classify(section) {
-        SectionId::Chapter { stage, portion } => expand_chapter(stage, portion, &mut emit),
-        SectionId::Named { .. } => {
-            let index = warp_index(section)?;
-            WARPS[index].expand(phase, &mut emit);
-            true
-        }
-    };
-    mapped.then_some(intent)
+    assert!(
+        expand_section(section, phase, &mut |op| {
+            unsafe { apply_op(ecl, &mut intent, op) };
+        }),
+        "parse-validated warp target failed to dispatch"
+    );
+    intent
 }

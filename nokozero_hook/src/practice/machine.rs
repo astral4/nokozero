@@ -11,15 +11,13 @@ pub(crate) enum Outcome {
     Pending = 1,
     Applied = 2,
     Vanilla = 3,
-    /// The catalog refused the `(section, phase)` pair at apply time.
-    FailedUnmapped = 4,
     /// The reload landed on a stage other than the requested section's.
-    FailedStageMismatch = 5,
+    FailedStageMismatch = 4,
     /// The stage's ECL files were not resolvable when the warp was attempted.
-    FailedNoEcl = 6,
+    FailedNoEcl = 5,
     /// A reset asked to restart the live stage at an invalid difficulty.
     /// (For example, Extra stage segments only exist on the Extra difficulty.)
-    FailedDifficultyMismatch = 7,
+    FailedDifficultyMismatch = 6,
 }
 
 #[derive(Clone, Copy)]
