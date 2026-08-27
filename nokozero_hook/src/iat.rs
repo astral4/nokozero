@@ -10,7 +10,6 @@ use windows_sys::Win32::Foundation::HMODULE;
 use windows_sys::Win32::System::Diagnostics::Debug::{
     IMAGE_DATA_DIRECTORY, IMAGE_DIRECTORY_ENTRY_IMPORT, IMAGE_NT_HEADERS32, IMAGE_OPTIONAL_HEADER32,
 };
-use windows_sys::Win32::System::Memory::PAGE_READWRITE;
 use windows_sys::Win32::System::SystemServices::{
     IMAGE_DOS_HEADER, IMAGE_DOS_SIGNATURE, IMAGE_IMPORT_BY_NAME, IMAGE_IMPORT_DESCRIPTOR,
     IMAGE_NT_SIGNATURE, IMAGE_ORDINAL_FLAG32,
@@ -54,14 +53,9 @@ pub(crate) unsafe fn hook_import(game: HMODULE, import: ImportRef, hook: *mut ()
         abort();
     }
     let written = unsafe {
-        with_writable(
-            slot_raw.cast(),
-            size_of::<*mut ()>(),
-            PAGE_READWRITE,
-            |_| {
-                write_unaligned(slot_raw, hook);
-            },
-        )
+        with_writable(slot_raw.cast(), size_of::<*mut ()>(), |_| {
+            write_unaligned(slot_raw, hook);
+        })
     };
     if written.is_none() {
         eprintln!("nokozero_hook: iat: slot unwritable: {import}");

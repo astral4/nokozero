@@ -4,7 +4,7 @@ use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::process::abort;
 use std::ptr::{copy_nonoverlapping, with_exposed_provenance, with_exposed_provenance_mut};
 use windows_sys::Win32::System::Diagnostics::Debug::FlushInstructionCache;
-use windows_sys::Win32::System::Memory::{PAGE_PROTECTION_FLAGS, PAGE_READWRITE, VirtualProtect};
+use windows_sys::Win32::System::Memory::{PAGE_READWRITE, VirtualProtect};
 use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
 /// The length of a rel32 branch (opcode plus disp32).
@@ -140,6 +140,8 @@ impl<const N: usize> Site<N> {
             patch_bytes(self.addr, &bytes, self.name);
         }
 
+        // This is equivalent to an `expect_bytes` post-write check, but here we rederive the branch target
+        // so a mismatch reports where the written branch actually lands.
         let actual = unsafe { read_at::<N>(self.addr) };
         let read_disp = i32::from_le_bytes([actual[1], actual[2], actual[3], actual[4]]);
         #[expect(clippy::cast_possible_truncation)]
@@ -274,7 +276,7 @@ impl<const N: usize> Patch<N> {
 unsafe fn patch_bytes(addr: u32, src: &[u8], name: &str) {
     let dst = with_exposed_provenance_mut(addr as usize);
     let written = unsafe {
-        with_writable(dst, src.len(), PAGE_READWRITE, |p| {
+        with_writable(dst, src.len(), |p| {
             copy_nonoverlapping(src.as_ptr(), p, src.len());
         })
     };
@@ -312,23 +314,21 @@ unsafe fn read_at<const N: usize>(addr: u32) -> [u8; N] {
     buf
 }
 
-/// Reprotects a region to `prot` for the duration of `f`, restores the original protection, and flushes the instruction cache.
+/// Makes a region writable for the duration of `f`, restores the original protection, and flushes the instruction cache.
 /// `None` means the initial protection change failed and `f` was not called.
 ///
 /// # Safety
 ///
-/// If `prot` excludes EXECUTE, no other thread may execute anywhere on the affected pages.
-/// Writes through `f` must stay within `[addr, addr + len)`.
+/// No other thread may execute anywhere on the affected pages for the duration. Writes through `f` must stay within `[addr, addr + len)`.
 #[must_use]
 pub(crate) unsafe fn with_writable<R>(
     addr: *mut u8,
     len: usize,
-    prot: PAGE_PROTECTION_FLAGS,
     f: impl FnOnce(*mut u8) -> R,
 ) -> Option<R> {
     let target = addr.cast();
     let mut saved = 0;
-    if unsafe { VirtualProtect(target, len, prot, &raw mut saved) } == 0 {
+    if unsafe { VirtualProtect(target, len, PAGE_READWRITE, &raw mut saved) } == 0 {
         return None;
     }
     let result = f(addr);
