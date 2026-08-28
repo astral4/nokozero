@@ -2,8 +2,8 @@
 //!
 //! A payload is a [`META_WORDS`]-word meta block followed by six entity sections. Each section has a `count` field of type `u32`
 //! followed by `count` rows of the matching [`SECTION_WIDTHS`] entry. Every field is 4 bytes little-endian so the entire payload
-//! can parse as an array with 4-byte elements. Enemy `max_hp` and item `kind` are `f32` so rows are homogenous and parsing is easier.
-//! These values are still exact below 2^24.
+//! can parse as an array with 4-byte elements. Enemy `max_hp` / `invuln_frames` and item `kind` are `f32` so rows are homogenous
+//! and parsing is easier. These values are still exact below 2^24.
 
 use crate::practice::WireMeta;
 use crate::reader::{
@@ -90,7 +90,7 @@ impl Bullet {
 }
 
 impl Enemy {
-    const WIDTH: usize = 8;
+    const WIDTH: usize = 10;
 
     #[expect(clippy::cast_precision_loss)]
     fn cells(&self) -> [f32; Self::WIDTH] {
@@ -103,6 +103,8 @@ impl Enemy {
             self.hp_ratio,
             self.max_hp as f32,
             f32::from(u8::from(self.is_boss)),
+            f32::from(u8::from(self.is_invulnerable)),
+            self.invuln_frames as f32,
         ]
     }
 }
@@ -349,6 +351,8 @@ mod tests {
                 hp_ratio: 0.5,
                 max_hp: 60000,
                 is_boss: true,
+                is_invulnerable: true,
+                invuln_frames: 42,
             }],
             items: vec![Item {
                 pos_x: 20.,
@@ -429,8 +433,10 @@ mod tests {
         assert_eq!(f32_at(&buf, word + 6), 0.5);
         assert_eq!(f32_at(&buf, word + 7), 60000.);
         assert_eq!(f32_at(&buf, word + 8), 1.);
+        assert_eq!(f32_at(&buf, word + 9), 1.);
+        assert_eq!(f32_at(&buf, word + 10), 42.);
         // items
-        word += 1 + 8;
+        word += 1 + 10;
         assert_eq!(u32_at(&buf, word), 1);
         assert_eq!(f32_at(&buf, word + 5), 8.);
         // segment lasers

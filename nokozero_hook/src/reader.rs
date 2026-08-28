@@ -22,8 +22,12 @@ const ENEMY_HITBOX_RADIUS: usize = 0x120c + 0x118;
 const ENEMY_ANM_VM_ID: usize = 0x120c + 0x124;
 const ENEMY_HP: usize = 0x120c + 0x3f74;
 const ENEMY_MAX_HP: usize = 0x120c + 0x3f78;
+const ENEMY_INVULN_TIMER: usize = 0x120c + 0x3ffc;
 const ENEMY_FLAGS: usize = 0x120c + 0x4060;
 const ENEMY_BOSS_FLAG: u32 = 1 << 23;
+/// Bomb shield raised, the ECL invincibility flag, and hidden, respectively.
+/// Any of the three makes the enemy undamageable on its own, independently of [`ENEMY_INVULN_TIMER`].
+const ENEMY_INVULN_FLAGS: u32 = (1 << 0) | (1 << 4) | (1 << 5);
 
 const ITEMS_ARRAY: usize = 0x0;
 const ITEM_POS: usize = 0xc30;
@@ -142,6 +146,8 @@ pub(crate) struct Enemy {
     pub(crate) hp_ratio: f32,
     pub(crate) max_hp: i32,
     pub(crate) is_boss: bool,
+    pub(crate) is_invulnerable: bool,
+    pub(crate) invuln_frames: i32,
 }
 
 pub(crate) struct Item {
@@ -367,6 +373,9 @@ fn get_enemies(enemies_ptr: GamePtr, enemies: &mut Vec<Enemy>) {
             0.
         };
 
+        let invuln_frames = unsafe { data.read::<i32>(ENEMY_INVULN_TIMER) }.max(0);
+        let is_invulnerable = flags & ENEMY_INVULN_FLAGS != 0 || invuln_frames > 0;
+
         enemies.push(Enemy {
             pos_x,
             pos_y,
@@ -376,6 +385,8 @@ fn get_enemies(enemies_ptr: GamePtr, enemies: &mut Vec<Enemy>) {
             hp_ratio,
             max_hp,
             is_boss,
+            is_invulnerable,
+            invuln_frames,
         });
     }
 }
