@@ -58,14 +58,22 @@ Optionally, you can add the Rust [compilation target](https://doc.rust-lang.org/
 rustup target add i686-pc-windows-gnu
 ```
 
-## Step 5: Compile crates
+## Step 5: Install uv
 
-`nokozero_hook` compiles to a 32-bit Windows library and intercepts the game's input reading for programmatic control. It must be compiled *before* compiling the main crate `nokozero`.
+Follow the uv [installation instructions](https://docs.astral.sh/uv/getting-started/installation/), then set up the environment from the project root:
+
+```
+uv sync
+```
+
+## Step 6: Compile the hook library
+
+`nokozero_hook` compiles to a 32-bit Windows library that is deployed next to the game executable.
 
 This repository comes with a [justfile](https://github.com/casey/just) for build orchestration. From the project root:
 
 ```
-just build
+just build-hook
 ```
 
 Equivalently, without `just`:

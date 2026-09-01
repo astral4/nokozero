@@ -1,0 +1,43 @@
+[project]
+name = "nokozero"
+version = "0.0.0"
+description = "Reinforcement learning agent that plays Touhou"
+readme = "README.md"
+license = "MIT OR Apache-2.0"
+authors = [{ name = "Kyle Chen" }]
+requires-python = ">=3.14"
+dependencies = ["numpy>=2.5.2"]
+
+[project.scripts]
+nokozero = "nokozero.cli:main"
+
+[dependency-groups]
+dev = ["basedpyright>=1.39.10", "pytest>=9.1.1", "ruff>=0.16.4"]
+
+[build-system]
+requires = ["uv_build>=0.12.6,<0.13"]
+build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = ["COM812", "CPY001", "D105", "D107", "D203", "D213"]
+
+[tool.basedpyright]
+typeCheckingMode = "all"
+pythonPlatform = "Linux"
+include = ["src", "tests"]
+reportAny = false
+reportExplicitAny = false
+reportImplicitStringConcatenation = false
+reportUnannotatedClassAttribute = false
+reportUnusedCallResult = false
+
+[[tool.basedpyright.executionEnvironments]]
+root = "tests"
+reportPrivateUsage = false

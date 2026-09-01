@@ -1,23 +1,28 @@
 hook := "--manifest-path nokozero_hook/Cargo.toml"
 
-default: build
-
-build: build-hook
-
 build-hook:
     cargo build {{hook}} --release
 
+# `"$@"` rather than `{{ARGS}}`: an interpolation is re-split by the shell, so a game
+# directory containing a space would reach argparse as two arguments.
+[positional-arguments]
+run *ARGS: build-hook
+    uv run nokozero "$@"
+
 fmt:
     cargo fmt --all {{hook}}
+    uv run ruff format
 
-test-hook:
+test:
     cargo test {{hook}}
+    uv run pytest
 
-clippy-hook:
+lint:
     cargo clippy {{hook}} --release --all-targets -- -D warnings
-
-lint: clippy-hook
     cargo fmt --all {{hook}} --check
+    uv run ruff check
+    uv run ruff format --check
+    uv run basedpyright
 
 clean:
     cargo clean {{hook}}
