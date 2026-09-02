@@ -3,14 +3,15 @@
 //! A payload is a [`META_WORDS`]-word meta block followed by six entity sections. Each section has a `count` field of type `u32`
 //! followed by `count` rows of the matching [`SECTION_WIDTHS`] entry. Every field is 4 bytes little-endian so the entire payload
 //! can parse as an array with 4-byte elements. Enemy `max_hp` / `invuln_frames` and item `kind` are `f32` so rows are homogenous
-//! and parsing is easier. These values are still exact below 2^24.
+//! and parsing is easier. These values are still exact below 2^24. Flag words are split into their low and high 16 bits,
+//! each exact as an `f32`.
 
 use crate::practice::WireMeta;
 use crate::reader::{
     Bullet, CurvePoint, Enemy, GameState, Item, RayLaser, Resources, SegmentLaser,
 };
 
-const META_WORDS: usize = 22;
+const META_WORDS: usize = 32;
 /// Bullets; enemies; items; segment lasers; ray lasers; curve laser points.
 const SECTION_WIDTHS: [usize; 6] = [
     Bullet::WIDTH,
@@ -75,36 +76,54 @@ pub(crate) fn build(buf: &mut Vec<u8>, state: Option<&GameState>, meta: &Meta, r
     put_section(buf, &state.lasers.curve_points, CurvePoint::cells);
 }
 
+#[expect(clippy::cast_possible_truncation)]
+fn split_flags(flags: u32) -> [f32; 2] {
+    [f32::from(flags as u16), f32::from((flags >> 16) as u16)]
+}
+
 impl Bullet {
-    const WIDTH: usize = 5;
+    const WIDTH: usize = 9;
 
     fn cells(&self) -> [f32; Self::WIDTH] {
+        let [flags_lo, flags_hi] = split_flags(self.flags);
         [
             self.pos_x,
             self.pos_y,
             self.vel_x,
             self.vel_y,
-            self.hitbox_radius,
+            self.size_w,
+            self.size_h,
+            self.scale,
+            flags_lo,
+            flags_hi,
         ]
     }
 }
 
 impl Enemy {
-    const WIDTH: usize = 10;
+    const WIDTH: usize = 17;
 
     #[expect(clippy::cast_precision_loss)]
     fn cells(&self) -> [f32; Self::WIDTH] {
+        let [flags_lo, flags_hi] = split_flags(self.flags);
         [
             self.pos_x,
             self.pos_y,
             self.vel_x,
             self.vel_y,
-            self.hitbox_radius,
+            self.hitbox_w,
+            self.hitbox_h,
+            self.hurtbox_w,
+            self.hurtbox_h,
             self.hp_ratio,
             self.max_hp as f32,
             f32::from(u8::from(self.is_boss)),
             f32::from(u8::from(self.is_invulnerable)),
             self.invuln_frames as f32,
+            f32::from(u8::from(self.is_lethal)),
+            self.no_hitbox_frames as f32,
+            flags_lo,
+            flags_hi,
         ]
     }
 }
@@ -188,6 +207,15 @@ fn put_meta(buf: &mut Vec<u8>, state: Option<&GameState>, meta: &Meta, res: &Res
     put_i32(buf, res.life_fragments);
     put_i32(buf, res.bombs);
     put_i32(buf, res.bomb_fragments);
+    put_u32(buf, res.rng_state);
+    put_u32(buf, res.rng_count);
+    put_u32(buf, res.chapter);
+    put_u32(buf, res.time_in_chapter);
+    put_i32(buf, res.spell_id);
+    put_i32(buf, res.miss_count);
+    put_i32(buf, res.spell_timer);
+    put_u32(buf, res.spell_flags);
+    put_u32(buf, res.mode_flags);
     match state {
         Some(s) => put_f32s(
             buf,
@@ -196,9 +224,10 @@ fn put_meta(buf: &mut Vec<u8>, state: Option<&GameState>, meta: &Meta, res: &Res
                 s.player.pos_y,
                 f32::from(u8::from(s.player.is_focused)),
                 s.player.hitbox_radius,
+                s.player.hit_radius,
             ],
         ),
-        None => put_f32s(buf, [0.; 4]),
+        None => put_f32s(buf, [0.; 5]),
     }
 }
 
@@ -244,6 +273,15 @@ mod tests {
             life_fragments: 1,
             bombs: 3,
             bomb_fragments: 2,
+            rng_state: 0xBEEF,
+            rng_count: 44,
+            chapter: 3,
+            time_in_chapter: 77,
+            spell_id: -1,
+            miss_count: 2,
+            spell_timer: -5,
+            spell_flags: 0x8000_0001,
+            mode_flags: 0x18,
         }
     }
 
@@ -322,8 +360,18 @@ mod tests {
         assert_eq!(u32_at(&buf, 10), 567); // score_div10
         assert_eq!(i32_at(&buf, 11), 89); // graze
         assert_eq!(i32_at(&buf, 12), 500_000); // value_x100
+        assert_eq!(i32_at(&buf, 17), 2); // bomb_fragments
+        assert_eq!(u32_at(&buf, 18), 0xBEEF); // rng_state
+        assert_eq!(u32_at(&buf, 19), 44); // rng_count
+        assert_eq!(u32_at(&buf, 20), 3); // chapter
+        assert_eq!(u32_at(&buf, 21), 77); // time_in_chapter
+        assert_eq!(i32_at(&buf, 22), -1); // spell_id
+        assert_eq!(i32_at(&buf, 23), 2); // miss_count
+        assert_eq!(i32_at(&buf, 24), -5); // spell_timer
+        assert_eq!(u32_at(&buf, 25), 0x8000_0001); // spell_flags
+        assert_eq!(u32_at(&buf, 26), 0x18); // mode_flags
         // player block
-        for word in 18..22 {
+        for word in 27..32 {
             assert_eq!(f32_at(&buf, word), 0.);
         }
         for section in 0..6 {
@@ -340,19 +388,28 @@ mod tests {
                 pos_y: 2.,
                 vel_x: 3.,
                 vel_y: 4.,
-                hitbox_radius: 5.,
+                size_w: 5.,
+                size_h: 6.,
+                scale: 7.,
+                flags: 0x0001_0012,
             }],
             enemies: vec![Enemy {
                 pos_x: 10.,
                 pos_y: 11.,
                 vel_x: 12.,
                 vel_y: 13.,
-                hitbox_radius: 14.,
+                hitbox_w: 14.,
+                hitbox_h: 15.,
+                hurtbox_w: 16.,
+                hurtbox_h: 17.,
                 hp_ratio: 0.5,
                 max_hp: 60000,
                 is_boss: true,
                 is_invulnerable: true,
                 invuln_frames: 42,
+                is_lethal: false,
+                no_hitbox_frames: 9,
+                flags: 0x0400_0002,
             }],
             items: vec![Item {
                 pos_x: 20.,
@@ -393,6 +450,7 @@ mod tests {
                 pos_y: 200.25,
                 is_focused: true,
                 hitbox_radius: 2.,
+                hit_radius: 3.,
             },
         };
 
@@ -417,26 +475,40 @@ mod tests {
         assert_eq!(u32_at(&buf, 3), 2); // load_generation
         assert_eq!(u32_at(&buf, 7), 1); // hits
         assert_eq!(u32_at(&buf, 8), 0); // frame flags
+        assert_eq!(u32_at(&buf, 18), 0xBEEF); // rng_state
         // player block
-        assert_eq!(f32_at(&buf, 18), -100.5);
-        assert_eq!(f32_at(&buf, 19), 200.25);
-        assert_eq!(f32_at(&buf, 20), 1.);
-        assert_eq!(f32_at(&buf, 21), 2.);
+        assert_eq!(f32_at(&buf, 27), -100.5);
+        assert_eq!(f32_at(&buf, 28), 200.25);
+        assert_eq!(f32_at(&buf, 29), 1.);
+        assert_eq!(f32_at(&buf, 30), 2.);
+        assert_eq!(f32_at(&buf, 31), 3.);
         // bullets
         let mut word = META_WORDS;
         assert_eq!(u32_at(&buf, word), 1);
         assert_eq!(f32_at(&buf, word + 1), 1.);
         assert_eq!(f32_at(&buf, word + 5), 5.);
+        assert_eq!(f32_at(&buf, word + 6), 6.);
+        assert_eq!(f32_at(&buf, word + 7), 7.);
+        assert_eq!(f32_at(&buf, word + 8), 18.); // flags low half: 0x0012
+        assert_eq!(f32_at(&buf, word + 9), 1.); // flags high half: 0x0001
         // enemies
-        word += 1 + 5;
+        word += 1 + 9;
         assert_eq!(u32_at(&buf, word), 1);
-        assert_eq!(f32_at(&buf, word + 6), 0.5);
-        assert_eq!(f32_at(&buf, word + 7), 60000.);
-        assert_eq!(f32_at(&buf, word + 8), 1.);
-        assert_eq!(f32_at(&buf, word + 9), 1.);
-        assert_eq!(f32_at(&buf, word + 10), 42.);
+        assert_eq!(f32_at(&buf, word + 5), 14.);
+        assert_eq!(f32_at(&buf, word + 6), 15.);
+        assert_eq!(f32_at(&buf, word + 7), 16.);
+        assert_eq!(f32_at(&buf, word + 8), 17.);
+        assert_eq!(f32_at(&buf, word + 9), 0.5);
+        assert_eq!(f32_at(&buf, word + 10), 60000.);
+        assert_eq!(f32_at(&buf, word + 11), 1.);
+        assert_eq!(f32_at(&buf, word + 12), 1.);
+        assert_eq!(f32_at(&buf, word + 13), 42.);
+        assert_eq!(f32_at(&buf, word + 14), 0.); // is_lethal
+        assert_eq!(f32_at(&buf, word + 15), 9.); // no_hitbox_frames
+        assert_eq!(f32_at(&buf, word + 16), 2.); // flags low half
+        assert_eq!(f32_at(&buf, word + 17), 1024.); // flags high half: 0x0400
         // items
-        word += 1 + 10;
+        word += 1 + 17;
         assert_eq!(u32_at(&buf, word), 1);
         assert_eq!(f32_at(&buf, word + 5), 8.);
         // segment lasers

@@ -1,7 +1,7 @@
 //! Logic and hooking for the player death sequence.
 
-use super::Verdict;
 use super::load::{Generation, PerLoad, load_generation};
+use super::{FLAG_REAL_DEATHS, Verdict, episode_flag};
 use crate::ipc::is_connected;
 use crate::patch::Site;
 use crate::thread::MainThread;
@@ -73,7 +73,11 @@ extern "C" fn on_player_die() -> Verdict {
     if first_hit == Some(true) {
         FORCED_STEP_OWED.set(thread, generation, true);
     }
-    Verdict::Divert
+    if episode_flag(thread, FLAG_REAL_DEATHS) {
+        Verdict::Run
+    } else {
+        Verdict::Divert
+    }
 }
 
 /// # Safety

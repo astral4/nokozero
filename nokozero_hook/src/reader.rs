@@ -1,33 +1,43 @@
 //! Logic for reading game entity data from process memory.
 
 use crate::addrs::{
-    BOMB_FRAGMENTS_VA, BOMBS_VA, BULLET_MANAGER_PTR_VA, ENEMY_MANAGER_PTR_VA, GAME_TICK_VA,
-    GRAZE_VA, ITEM_MANAGER_PTR_VA, LASER_MANAGER_PTR_VA, LIFE_FRAGMENTS_VA, LIVES_VA,
-    PLAYER_PTR_VA, POWER_VA, SCORE_DIV10_VA, VALUE_VA,
+    BOMB_FRAGMENTS_VA, BOMBS_VA, BULLET_MANAGER_PTR_VA, CURRENT_CHAPTER_VA, ENEMY_MANAGER_PTR_VA,
+    GAME_TICK_VA, GRAZE_VA, ITEM_MANAGER_PTR_VA, LASER_MANAGER_PTR_VA, LIFE_FRAGMENTS_VA, LIVES_VA,
+    MISS_COUNT_VA, MODEFLAGS_VA, PLAYER_PTR_VA, POWER_VA, RNG_COUNT_VA, RNG_VA, SCORE_DIV10_VA,
+    SPELL_ID_VA, SPELLCARD_PTR_VA, TIME_IN_CHAPTER_VA, VALUE_VA,
 };
 use crate::log::fatal;
-use crate::mem::{game_live, read};
+use crate::mem::{game_live, read, read_ptr};
 use std::ptr::{NonNull, with_exposed_provenance_mut};
 
 const BULLETS_LIST: usize = 0x68;
+/// Bullet flags. Bit `0x2` = collide; bit `0x10` = test a circle of radius [`BULLET_SIZE`]`.0`; bit `0x40` = scale the size by [`BULLET_SCALE`].
+/// Otherwise the test is an axis-aligned box with [`BULLET_SIZE`] as its full width and height.
+const BULLET_FLAGS: usize = 0x20;
 const BULLET_POS: usize = 0xc38;
 const BULLET_VEL: usize = 0xc44;
-const BULLET_HITBOX_RADIUS: usize = 0xc58;
+const BULLET_SIZE: usize = 0xc58;
 const BULLET_STATE: usize = 0xc8a;
+const BULLET_SCALE: usize = 0x1438;
 
 const ENEMIES_LIST: usize = 0x180;
 const ENEMY_POS: usize = 0x120c + 0x44;
 const ENEMY_VEL: usize = 0x120c + 0x78;
-const ENEMY_HITBOX_RADIUS: usize = 0x120c + 0x118;
+const ENEMY_HURTBOX: usize = 0x120c + 0x110;
+const ENEMY_HITBOX: usize = 0x120c + 0x118;
 const ENEMY_ANM_VM_ID: usize = 0x120c + 0x124;
 const ENEMY_HP: usize = 0x120c + 0x3f74;
 const ENEMY_MAX_HP: usize = 0x120c + 0x3f78;
 const ENEMY_INVULN_TIMER: usize = 0x120c + 0x3ffc;
+/// Frames left during which the enemy cannot kill the player.
+const ENEMY_NO_HITBOX_TIMER: usize = 0x120c + 0x4010;
 const ENEMY_FLAGS: usize = 0x120c + 0x4060;
 const ENEMY_BOSS_FLAG: u32 = 1 << 23;
 /// Bomb shield raised, the ECL invincibility flag, and hidden, respectively.
 /// Any of the three makes the enemy undamageable on its own, independently of [`ENEMY_INVULN_TIMER`].
 const ENEMY_INVULN_FLAGS: u32 = (1 << 0) | (1 << 4) | (1 << 5);
+/// Flags under which the enemy's body cannot kill the player.
+const ENEMY_HARMLESS_FLAGS: u32 = (1 << 1) | (1 << 5) | (1 << 26);
 
 const ITEMS_ARRAY: usize = 0x0;
 const ITEM_POS: usize = 0xc30;
@@ -56,9 +66,14 @@ const CURVE_LASER_NODE_ANGLE: usize = 0x18;
 const CURVE_LASER_NODE_SPEED: usize = 0x1c;
 const CURVE_LASER_NODE_BYTE_LEN: usize = 0x20;
 
+const SPELLCARD_TIMER: usize = 0x24;
+const SPELLCARD_FLAGS: usize = 0x78;
+
 const PLAYER_POS: usize = 0x618;
 const PLAYER_IS_FOCUSED: usize = 0x16240;
 const PLAYER_HITBOX_RADIUS: usize = 0x2bfc8;
+const PLAYER_SHOT_TABLE_PTR: usize = 0x2c008;
+const SHOT_TABLE_HIT_RADIUS: usize = 0x4;
 
 pub(crate) struct GameState {
     pub(crate) bullets: Vec<Bullet>,
@@ -134,7 +149,10 @@ pub(crate) struct Bullet {
     pub(crate) pos_y: f32,
     pub(crate) vel_x: f32,
     pub(crate) vel_y: f32,
-    pub(crate) hitbox_radius: f32,
+    pub(crate) size_w: f32,
+    pub(crate) size_h: f32,
+    pub(crate) scale: f32,
+    pub(crate) flags: u32,
 }
 
 pub(crate) struct Enemy {
@@ -142,12 +160,18 @@ pub(crate) struct Enemy {
     pub(crate) pos_y: f32,
     pub(crate) vel_x: f32,
     pub(crate) vel_y: f32,
-    pub(crate) hitbox_radius: f32,
+    pub(crate) hitbox_w: f32,
+    pub(crate) hitbox_h: f32,
+    pub(crate) hurtbox_w: f32,
+    pub(crate) hurtbox_h: f32,
     pub(crate) hp_ratio: f32,
     pub(crate) max_hp: i32,
     pub(crate) is_boss: bool,
     pub(crate) is_invulnerable: bool,
     pub(crate) invuln_frames: i32,
+    pub(crate) is_lethal: bool,
+    pub(crate) no_hitbox_frames: i32,
+    pub(crate) flags: u32,
 }
 
 pub(crate) struct Item {
@@ -199,6 +223,8 @@ pub(crate) struct Player {
     pub(crate) pos_y: f32,
     pub(crate) is_focused: bool,
     pub(crate) hitbox_radius: f32,
+    /// `0` if the table pointer is null.
+    pub(crate) hit_radius: f32,
 }
 
 pub(crate) struct Resources {
@@ -212,11 +238,37 @@ pub(crate) struct Resources {
     pub(crate) life_fragments: i32,
     pub(crate) bombs: i32,
     pub(crate) bomb_fragments: i32,
+    /// The replay-safe RNG state (a `u16`; see [`RNG_VA`]).
+    pub(crate) rng_state: u32,
+    /// The replay-safe RNG's call counter (see [`RNG_COUNT_VA`]).
+    pub(crate) rng_count: u32,
+    pub(crate) chapter: u32,
+    pub(crate) time_in_chapter: u32,
+    pub(crate) spell_id: i32,
+    pub(crate) miss_count: i32,
+    /// The live spell card's timer, or `0` when there is none.
+    pub(crate) spell_timer: i32,
+    /// The live spell card's flags, or `0` when there is none.
+    pub(crate) spell_flags: u32,
+    /// The run's mode flags (see [`MODEFLAGS_VA`]).
+    pub(crate) mode_flags: u32,
 }
 
 impl Resources {
     #[must_use]
     pub(crate) fn read() -> Self {
+        // The spell card object is only known to be live inside a stage.
+        let spellcard = if unsafe { game_live() } {
+            unsafe { read_ptr(SPELLCARD_PTR_VA) }
+        } else {
+            None
+        };
+        let (spell_timer, spell_flags) = spellcard.map_or((0, 0), |sc| unsafe {
+            (
+                read::<i32>(sc + SPELLCARD_TIMER),
+                read::<u32>(sc + SPELLCARD_FLAGS),
+            )
+        });
         unsafe {
             Self {
                 game_tick: read(GAME_TICK_VA),
@@ -228,6 +280,15 @@ impl Resources {
                 life_fragments: read(LIFE_FRAGMENTS_VA),
                 bombs: read(BOMBS_VA),
                 bomb_fragments: read(BOMB_FRAGMENTS_VA),
+                rng_state: u32::from(read::<u16>(RNG_VA)),
+                rng_count: read(RNG_COUNT_VA),
+                chapter: read(CURRENT_CHAPTER_VA),
+                time_in_chapter: read(TIME_IN_CHAPTER_VA),
+                spell_id: read(SPELL_ID_VA),
+                miss_count: read(MISS_COUNT_VA),
+                spell_timer,
+                spell_flags,
+                mode_flags: read(MODEFLAGS_VA),
             }
         }
     }
@@ -334,14 +395,19 @@ fn get_bullets(bullets_ptr: GamePtr, bullets: &mut Vec<Bullet>) {
 
         let [pos_x, pos_y] = unsafe { data.read::<[f32; 2]>(BULLET_POS) };
         let [vel_x, vel_y] = unsafe { data.read::<[f32; 2]>(BULLET_VEL) };
-        let hitbox_radius = unsafe { data.read::<f32>(BULLET_HITBOX_RADIUS) };
+        let [size_w, size_h] = unsafe { data.read::<[f32; 2]>(BULLET_SIZE) };
+        let scale = unsafe { data.read::<f32>(BULLET_SCALE) };
+        let flags = unsafe { data.read::<u32>(BULLET_FLAGS) };
 
         bullets.push(Bullet {
             pos_x,
             pos_y,
             vel_x,
             vel_y,
-            hitbox_radius,
+            size_w,
+            size_h,
+            scale,
+            flags,
         });
     }
 }
@@ -362,7 +428,10 @@ fn get_enemies(enemies_ptr: GamePtr, enemies: &mut Vec<Enemy>) {
 
         let [pos_x, pos_y] = unsafe { data.read::<[f32; 2]>(ENEMY_POS) };
         let [vel_x, vel_y] = unsafe { data.read::<[f32; 2]>(ENEMY_VEL) };
-        let hitbox_radius = unsafe { data.read::<f32>(ENEMY_HITBOX_RADIUS) };
+        let [hitbox_w, hitbox_h] = unsafe { data.read::<[f32; 2]>(ENEMY_HITBOX) };
+        let [hurtbox_w, hurtbox_h] = unsafe { data.read::<[f32; 2]>(ENEMY_HURTBOX) };
+        let no_hitbox_frames = unsafe { data.read::<i32>(ENEMY_NO_HITBOX_TIMER) };
+        let is_lethal = flags & ENEMY_HARMLESS_FLAGS == 0 && no_hitbox_frames <= 0;
 
         let max_hp = unsafe { data.read::<i32>(ENEMY_MAX_HP) };
         #[expect(clippy::cast_precision_loss)]
@@ -381,12 +450,18 @@ fn get_enemies(enemies_ptr: GamePtr, enemies: &mut Vec<Enemy>) {
             pos_y,
             vel_x,
             vel_y,
-            hitbox_radius,
+            hitbox_w,
+            hitbox_h,
+            hurtbox_w,
+            hurtbox_h,
             hp_ratio,
             max_hp,
             is_boss,
             is_invulnerable,
             invuln_frames,
+            is_lethal,
+            no_hitbox_frames,
+            flags,
         });
     }
 }
@@ -490,11 +565,16 @@ fn get_player(player_ptr: GamePtr) -> Player {
     let [pos_x, pos_y] = unsafe { player_ptr.read::<[f32; 2]>(PLAYER_POS) };
     let is_focused = unsafe { player_ptr.read::<u32>(PLAYER_IS_FOCUSED) } == 1;
     let hitbox_radius = unsafe { player_ptr.read::<f32>(PLAYER_HITBOX_RADIUS) };
+    let hit_radius = unsafe { player_ptr.read_ptr(PLAYER_SHOT_TABLE_PTR) }
+        .map_or(0., |table| unsafe {
+            table.read::<f32>(SHOT_TABLE_HIT_RADIUS)
+        });
 
     Player {
         pos_x,
         pos_y,
         is_focused,
         hitbox_radius,
+        hit_radius,
     }
 }

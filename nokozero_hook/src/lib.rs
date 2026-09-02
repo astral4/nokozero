@@ -24,13 +24,14 @@ mod thread;
 use crate::addrs::{GAMEMODE_INGAME, GAMEMODE_MENU, GAMEMODE_VA, GUI_PTR_VA};
 use crate::env::Config;
 use crate::features::{Meta, Scene, build as build_features};
-use crate::ipc::{Command, ObsFrame, is_connected, step};
+use crate::ipc::{Command, CommandBuf, ObsFrame, is_connected, step};
 use crate::log::fatal;
 use crate::mem::{game_live, read, read_ptr};
 use crate::menu::navigate;
 use crate::patch::{CallSite, NearBranchSite};
 use crate::practice::{
-    WireMeta, accept_reset, apply_pending_reset, observe_loads, take_forced_step,
+    FLAG_RAW_DIALOGUE, WireMeta, accept_reset, apply_pending_reset, episode_flag, observe_loads,
+    place_before_consume, stage_step_due, stash_record, take_forced_step,
 };
 use crate::reader::{GameState, Resources};
 use crate::thread::{MainCell, MainThread, MainToken};
@@ -42,8 +43,9 @@ use windows_sys::Win32::System::LibraryLoader::{DisableThreadLibraryCalls, GetMo
 use windows_sys::Win32::System::SystemServices::DLL_PROCESS_ATTACH;
 use windows_sys::core::BOOL;
 
-/// The number of frames between RL steps.
-const READ_INTERVAL: u32 = 3;
+/// The number of frames between RL steps outside a live stage, and the default inside one
+/// (a reset sets each episode's own; see `PracticeParams::step_interval`).
+pub(crate) const READ_INTERVAL: u32 = 3;
 
 /// Rising-edge cadence for injected inputs (e.g. during menu navigation and dialogue).
 const TAP_INTERVAL: u32 = 3;
@@ -51,6 +53,7 @@ const TAP_INTERVAL: u32 = 3;
 struct StepBufs {
     state: GameState,
     frame_buf: Vec<u8>,
+    cmd_buf: CommandBuf,
 }
 
 impl StepBufs {
@@ -58,17 +61,20 @@ impl StepBufs {
         Self {
             state: GameState::new(),
             frame_buf: Vec::new(),
+            cmd_buf: CommandBuf::new(),
         }
     }
 }
+
+static TAPE: MainCell<Vec<Action>> = MainCell::new(Vec::new());
 
 /// A controller-supplied action. The action space is a subset of [`InputFlags`].
 #[derive(Clone, Copy)]
 struct Action(u32);
 
 impl Action {
-    // SHOOT | BOMB | FOCUS | UP | DOWN | LEFT | RIGHT
-    const MASK: u32 = 0b1111_1011;
+    // SHOOT | BOMB | FOCUS | UP | DOWN | LEFT | RIGHT | SKIP
+    const MASK: u32 = 0b0010_1111_1011;
 
     fn from_wire(bits: u32) -> Option<Self> {
         (bits & !Self::MASK == 0).then_some(Self(bits))
@@ -112,6 +118,17 @@ static INPUT_OVERRIDDEN: MainCell<bool> = MainCell::new(false);
 /// The last controller action. Repeated on the frames between exchanges.
 static LAST_ACTION: MainCell<Action> = MainCell::new(Action::neutral());
 
+/// Applies the tape's next action if one is pending. Returns whether a tape frame was consumed.
+fn play_tape_frame(thread: MainThread) -> bool {
+    let mut tape = TAPE.replace(thread, Vec::new());
+    let Some(action) = tape.pop() else {
+        return false;
+    };
+    LAST_ACTION.set(thread, action);
+    TAPE.set(thread, tape);
+    true
+}
+
 /// Returns whether a boss dialogue is live in this frame.
 fn dialogue_active() -> bool {
     const GUI_MSG_VM_OFFSET: usize = 0x1b8;
@@ -140,19 +157,29 @@ extern "system" fn get_joypad_input_hook(_base: InputFlags) -> InputFlags {
     };
 
     observe_loads(thread);
-
     if connected {
+        place_before_consume(token);
         let frame = FRAME_COUNT.get(thread);
         FRAME_COUNT.set(thread, frame.wrapping_add(1));
 
-        let forced = take_forced_step(thread);
-        if frame.is_multiple_of(READ_INTERVAL) || forced {
+        // In a live stage, the cadence follows the load's own frame index and step interval (see `stage_step_due`), so a step always covers
+        // the same frames of the stage however many hook frames the menus and loads before it took. A tape consumes live stage frames
+        // instead of stepping on them, and leaves an owed forced step to its first frame after rather than taking it.
+        let stage_due = stage_step_due(thread);
+        let taping = stage_due.is_some() && play_tape_frame(thread);
+        let due = stage_due.unwrap_or_else(|| frame.is_multiple_of(READ_INTERVAL));
+        let forced = !taping && take_forced_step(thread);
+        if !taping && (due || forced) {
             let resources = Resources::read();
             let mut bufs = STEP_BUFS
                 .replace(thread, None)
                 .unwrap_or_else(StepBufs::new);
 
-            let StepBufs { state, frame_buf } = &mut bufs;
+            let StepBufs {
+                state,
+                frame_buf,
+                cmd_buf,
+            } = &mut bufs;
             let state = state.read();
             let wire = WireMeta::read(thread);
             let mut obs = ObsFrame::begin(frame_buf);
@@ -168,13 +195,26 @@ extern "system" fn get_joypad_input_hook(_base: InputFlags) -> InputFlags {
                 &resources,
             );
 
-            match step(obs) {
+            match step(obs, cmd_buf) {
                 Some(Command::Act(action)) => LAST_ACTION.set(thread, action),
-                Some(Command::Reset { seq, params }) => {
+                Some(Command::Tape(mut actions)) => {
+                    // Stored newest-last so the next frame is a `pop`.
+                    actions.reverse();
+                    TAPE.set(thread, actions);
+                }
+                Some(Command::Reset {
+                    seq,
+                    params,
+                    record,
+                }) => {
+                    let initial = Action::from_wire(params.initial_action())
+                        .unwrap_or_else(|| fatal!("RESET initial action outside the mask"));
                     if !accept_reset(thread, seq, params) {
                         fatal!("RESET rejected; another reset is still pending");
                     }
-                    LAST_ACTION.set(thread, Action::neutral());
+                    stash_record(thread, record);
+                    LAST_ACTION.set(thread, initial);
+                    TAPE.set(thread, Vec::new());
                 }
                 None => {}
             }
@@ -188,7 +228,7 @@ extern "system" fn get_joypad_input_hook(_base: InputFlags) -> InputFlags {
     match (connected, gamemode) {
         (true, GAMEMODE_INGAME) => {
             let mut input: InputFlags = LAST_ACTION.get(thread).into();
-            if dialogue_active() {
+            if dialogue_active() && !episode_flag(thread, FLAG_RAW_DIALOGUE) {
                 INPUT_OVERRIDDEN.set(thread, true);
                 input.remove(InputFlags::SHOOT);
                 if FRAME_COUNT.get(thread).is_multiple_of(TAP_INTERVAL) {

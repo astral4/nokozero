@@ -4,19 +4,27 @@
 //! a bounded retry and publishes the stream once. After the stream is up, any I/O error, EOF, or protocol violation aborts the process.
 //!
 //! The game thread drives a lockstep loop. Each RL step, it sends one observation and blocks for one command
-//! so the game advances at the driver's step rate.
+//! so the game advances at the driver's step rate. A TAPE command supplies one input per frame for many frames
+//! and ends the step like an ACT; the next observation follows the tape's last frame.
 
 use crate::Action;
 use crate::log::fatal;
-use crate::practice::{PARAMS_LEN, PracticeParams};
+use crate::practice::{FLAG_RECORD, PARAMS_LEN, PracticeParams, RECORD_LEN, StageRecord};
 use std::io::{ErrorKind, Read as _, Write as _};
 use std::net::TcpStream;
 use std::sync::OnceLock;
 use std::thread::{Builder as ThreadBuilder, sleep};
 use std::time::Duration;
 
+pub(crate) const MAX_TAPE_FRAMES: usize = 36_000;
+
 /// The largest allowed inbound command body length.
-const MAX_CMD: usize = 1 + 4 + PARAMS_LEN;
+const MAX_CMD: usize = 1 + 4 + 2 * MAX_TAPE_FRAMES;
+
+const _: () = assert!(
+    MAX_CMD >= 1 + 4 + PARAMS_LEN + RECORD_LEN,
+    "a RESET with a record must fit"
+);
 
 /// The largest allowed outbound frame length.
 const MAX_OBS: u32 = 1 << 20;
@@ -31,6 +39,7 @@ const MSG_OBS: u8 = 0x01;
 // Driver -> hook command tags.
 const CMD_ACT: u8 = 0x01;
 const CMD_RESET: u8 = 0x02;
+const CMD_TAPE: u8 = 0x03;
 
 static STREAM: OnceLock<TcpStream> = OnceLock::new();
 
@@ -76,7 +85,23 @@ pub(crate) fn is_connected() -> bool {
 /// A decoded step-ending command.
 pub(crate) enum Command {
     Act(Action),
-    Reset { seq: u32, params: PracticeParams },
+    Reset {
+        seq: u32,
+        params: PracticeParams,
+        /// `Some(_)` iff the params carry `FLAG_RECORD`.
+        record: Option<Box<StageRecord>>,
+    },
+    /// One action per frame, applied on the live stage frames that follow.
+    Tape(Vec<Action>),
+}
+
+/// The receive buffer for one command body.
+pub(crate) struct CommandBuf(Vec<u8>);
+
+impl CommandBuf {
+    pub(crate) fn new() -> Self {
+        Self(vec![0; MAX_CMD])
+    }
 }
 
 /// An observation frame under construction.
@@ -113,9 +138,9 @@ impl<'a> ObsFrame<'a> {
     }
 }
 
-/// Sends the observation, then blocks until the driver sends a step-ending command (ACT or RESET) and decodes it.
+/// Sends the observation, then blocks until the driver sends a step-ending command and decodes it.
 /// Returns `None` before the connection has been established. Aborts on any I/O error or protocol violation.
-pub(crate) fn step(obs: ObsFrame<'_>) -> Option<Command> {
+pub(crate) fn step(obs: ObsFrame<'_>, buf: &mut CommandBuf) -> Option<Command> {
     let stream = STREAM.get()?;
 
     let mut writer = stream;
@@ -127,8 +152,8 @@ pub(crate) fn step(obs: ObsFrame<'_>) -> Option<Command> {
         fatal!("send failed");
     }
 
-    let mut body = [0u8; MAX_CMD];
-    let payload = if let Some(len) = recv_frame(stream, &mut body) {
+    let body = &mut buf.0;
+    let payload = if let Some(len) = recv_frame(stream, body) {
         &body[1..len]
     } else {
         fatal!("recv failed");
@@ -145,26 +170,62 @@ pub(crate) fn step(obs: ObsFrame<'_>) -> Option<Command> {
             Some(Command::Act(action))
         }
         CMD_RESET => {
-            if payload.len() != 4 + PARAMS_LEN {
+            let Some((seq, rest)) = payload.split_at_checked(4) else {
                 fatal!("bad RESET length");
-            }
-            let seq = u32::from_le_bytes(payload[..4].try_into().unwrap());
-            let Some(params) = PracticeParams::parse(&payload[4..]) else {
+            };
+            let seq = u32::from_le_bytes(seq.try_into().unwrap());
+            let Some((params, blob)) = rest.split_at_checked(PARAMS_LEN) else {
+                fatal!("bad RESET length");
+            };
+            let Some(params) = PracticeParams::parse(params) else {
                 fatal!("RESET params invalid");
             };
-            Some(Command::Reset { seq, params })
+            let record = if params.has_flag(FLAG_RECORD) {
+                let Ok(record) = <&[u8; RECORD_LEN]>::try_from(blob) else {
+                    fatal!("RESET with FLAG_RECORD must carry a {RECORD_LEN}-byte record");
+                };
+                Some(Box::new(StageRecord(*record)))
+            } else {
+                if !blob.is_empty() {
+                    fatal!("bad RESET length");
+                }
+                None
+            };
+            Some(Command::Reset {
+                seq,
+                params,
+                record,
+            })
+        }
+        CMD_TAPE => {
+            let Some((count, keys)) = payload.split_at_checked(4) else {
+                fatal!("bad TAPE length");
+            };
+            let count = u32::from_le_bytes(count.try_into().unwrap()) as usize;
+            if count == 0 || count > MAX_TAPE_FRAMES || keys.len() != 2 * count {
+                fatal!("bad TAPE length");
+            }
+            let tape = keys
+                .chunks_exact(2)
+                .map(|k| {
+                    let bits = u32::from(u16::from_le_bytes([k[0], k[1]]));
+                    Action::from_wire(bits)
+                        .unwrap_or_else(|| fatal!("TAPE frame outside the action mask"))
+                })
+                .collect();
+            Some(Command::Tape(tape))
         }
         _ => fatal!("unknown command tag"),
     }
 }
 
 /// Fills the front of `body` with the entire frame body (tag byte + payload) and returns its length, or `None` on disconnect/desync.
-fn recv_frame(stream: &TcpStream, body: &mut [u8; MAX_CMD]) -> Option<usize> {
+fn recv_frame(stream: &TcpStream, body: &mut [u8]) -> Option<usize> {
     let mut reader = stream;
     let mut len_bytes = [0u8; 4];
     reader.read_exact(&mut len_bytes).ok()?;
     let len = u32::from_le_bytes(len_bytes) as usize;
-    if len == 0 || len > MAX_CMD {
+    if len == 0 || len > body.len() {
         return None;
     }
     reader.read_exact(&mut body[..len]).ok()?;

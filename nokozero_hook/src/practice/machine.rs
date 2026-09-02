@@ -28,8 +28,13 @@ enum ResetState {
     Idle,
     /// Reset accepted; waiting for a stable in-stage frame without an unpublished load.
     Requested { seq: u32, params: PracticeParams },
-    /// The reload has been triggered (teardown queued, tick guard holding); waiting for it to publish.
-    Reloading { seq: u32, params: PracticeParams },
+    /// The reload has been triggered; waiting for it to publish,
+    /// then for the input hook to place the player on the frame whose tick consumes it.
+    Reloading {
+        seq: u32,
+        params: PracticeParams,
+        placed: bool,
+    },
     /// This is reported until replaced by the next command.
     Done { seq: u32, outcome: Outcome },
 }
@@ -148,7 +153,11 @@ impl Lifecycle {
             return None;
         }
 
-        self.reset = ResetState::Reloading { seq, params };
+        self.reset = ResetState::Reloading {
+            seq,
+            params,
+            placed: false,
+        };
         Some(ReloadPlan {
             stage_select: params
                 .active
@@ -159,26 +168,54 @@ impl Lifecycle {
         })
     }
 
-    /// Decides the tick guard's action.
-    pub(super) fn tick_decision(&self, status: LoadStatus) -> TickDecision {
+    /// Returns the reload's publish (a settled load of a new generation while reloading), or none if it hasn't landed yet.
+    fn published(&self, status: LoadStatus) -> Option<(PracticeParams, Generation)> {
         let ResetState::Reloading { params, .. } = self.reset else {
+            return None;
+        };
+        // Between loader entry and publish, the loader thread manages the ECL buffers,
+        // so a settled load of the current generation is the one from before the reload.
+        let LoadStatus::Settled { generation, armed } = status else {
+            return None;
+        };
+        if generation == self.current_load.generation {
+            return None;
+        }
+        assert!(
+            armed == params.active,
+            "load handoff and reset request diverge"
+        );
+        Some((params, generation))
+    }
+
+    /// Returns the params of a reload whose publish is waiting to be consumed.
+    pub(super) fn pending_consume(&self, status: LoadStatus) -> Option<PracticeParams> {
+        self.published(status).map(|(params, _)| params)
+    }
+
+    /// Records that the input hook placed the player for the pending consume on this frame.
+    pub(super) fn mark_placed(&mut self) {
+        if let ResetState::Reloading { placed, .. } = &mut self.reset {
+            *placed = true;
+        }
+    }
+
+    /// Forgets this frame's placement (setting it to false). This should be called when the tick guard could not consume,
+    /// so the next frame's input hook places again and that frame's tick consumes.
+    pub(super) fn defer_consume(&mut self) {
+        if let ResetState::Reloading { placed, .. } = &mut self.reset {
+            *placed = false;
+        }
+    }
+
+    /// Returns the action that should be taken by the tick guard's action.
+    pub(super) fn tick_decision(&self, status: LoadStatus) -> TickDecision {
+        let ResetState::Reloading { placed, .. } = self.reset else {
             return TickDecision::Run;
         };
-        match status {
-            // Between loader entry and publish, the loader thread manages the ECL buffers.
-            LoadStatus::InFlight => TickDecision::Hold,
-            LoadStatus::Settled { generation, armed } => {
-                if generation == self.current_load.generation {
-                    // The reload has not published yet.
-                    TickDecision::Hold
-                } else {
-                    assert!(
-                        armed == params.active,
-                        "load handoff and reset request diverge"
-                    );
-                    TickDecision::Consume { params, generation }
-                }
-            }
+        match self.published(status) {
+            Some((params, generation)) if placed => TickDecision::Consume { params, generation },
+            _ => TickDecision::Hold,
         }
     }
 
@@ -330,6 +367,7 @@ mod tests {
                 arms_load: false,
             }
         );
+        lc.mark_placed();
         let TickDecision::Consume { params, .. } = lc.tick_decision(settled(1)) else {
             panic!("publish is for the reload");
         };
@@ -354,6 +392,7 @@ mod tests {
         );
         lc.observe(settled_armed(1));
         assert_eq!(lc.wire(), (Generation::for_test(0), 1, Outcome::Pending, 0));
+        lc.mark_placed();
         assert!(matches!(
             lc.tick_decision(settled_armed(1)),
             TickDecision::Consume { .. }
@@ -405,12 +444,57 @@ mod tests {
             TickDecision::Hold
         ));
         assert!(matches!(lc.tick_decision(settled(0)), TickDecision::Hold));
+        assert!(matches!(
+            lc.tick_decision(settled_armed(1)),
+            TickDecision::Hold
+        ));
+        lc.mark_placed();
         let TickDecision::Consume { params, generation } = lc.tick_decision(settled_armed(1))
         else {
             panic!("the reload's publish is consumed");
         };
         assert!(params.active);
         assert_eq!(generation, Generation::for_test(1));
+    }
+
+    #[test]
+    fn consume_follows_placement() {
+        let mut lc = Lifecycle::INIT;
+        assert!(lc.accept(1, params(1202, 1, 0)));
+        lc.mark_placed();
+        assert!(
+            lc.try_start_reload(true, settled(0), false, LIVE_STAGE, LIVE_CHARACTER)
+                .is_some()
+        );
+        assert!(lc.pending_consume(LoadStatus::InFlight).is_none());
+        assert!(lc.pending_consume(settled(0)).is_none());
+        assert!(lc.pending_consume(settled_armed(1)).is_some());
+        assert!(matches!(
+            lc.tick_decision(settled_armed(1)),
+            TickDecision::Hold
+        ));
+        lc.mark_placed();
+        assert!(lc.pending_consume(settled_armed(1)).is_some());
+        assert!(matches!(
+            lc.tick_decision(settled_armed(1)),
+            TickDecision::Consume { .. }
+        ));
+        lc.defer_consume();
+        assert!(matches!(
+            lc.tick_decision(settled_armed(1)),
+            TickDecision::Hold
+        ));
+        lc.mark_placed();
+        assert!(matches!(
+            lc.tick_decision(settled_armed(1)),
+            TickDecision::Consume { .. }
+        ));
+        lc.finish_reload(Generation::for_test(1), Outcome::Applied, 1202);
+        assert!(lc.pending_consume(settled_armed(1)).is_none());
+        assert!(matches!(
+            lc.tick_decision(settled_armed(1)),
+            TickDecision::Run
+        ));
     }
 
     #[test]
