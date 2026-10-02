@@ -6,6 +6,7 @@ compile_error!("nokozero_hook targets i686-pc-windows-gnu");
 std::arch::global_asm!(".globl __Unwind_Resume", "__Unwind_Resume:", "ud2");
 
 mod addrs;
+mod anm;
 mod dialog;
 mod dinput8;
 mod env;
@@ -19,6 +20,7 @@ mod menu;
 mod patch;
 mod practice;
 mod reader;
+mod score;
 mod thread;
 
 use crate::addrs::{GAMEMODE_INGAME, GAMEMODE_MENU, GAMEMODE_VA, GUI_PTR_VA};
@@ -273,6 +275,8 @@ unsafe fn install(headless: bool) {
 
         practice::install();
         menu::install();
+        anm::install();
+        score::install();
 
         let game = GetModuleHandleA(null());
 
