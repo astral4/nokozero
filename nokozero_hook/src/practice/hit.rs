@@ -65,12 +65,9 @@ extern "C" fn on_player_die() -> Verdict {
     }
     let thread = MainThread::current();
     let generation = load_generation();
-    let first_hit = HITS.update(thread, generation, |hits| {
-        let first = *hits == 0;
-        *hits = hits.wrapping_add(1);
-        Some(first)
-    });
-    if first_hit == Some(true) {
+    let hits = HITS.get(thread, generation);
+    HITS.set(thread, generation, hits.wrapping_add(1));
+    if hits == 0 {
         FORCED_STEP_OWED.set(thread, generation, true);
     }
     if episode_flag(thread, FLAG_REAL_DEATHS) {
