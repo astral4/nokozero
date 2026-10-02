@@ -1,8 +1,10 @@
 //! Constructs for main-thread identity and access.
 
 use crate::log::fatal;
-use std::cell::Cell;
+use std::cell::{RefCell, RefMut};
 use std::marker::PhantomData;
+use std::mem::take;
+use std::panic::Location;
 use std::sync::atomic::{AtomicU32, Ordering};
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 
@@ -67,7 +69,7 @@ impl MainToken {
 
 /// An interior-mutable cell for main-thread-only state in contexts that require `Sync`. This type should be preferred over atomic types
 /// when there is no cross-thread sharing, as atomics would misleadingly signal lock-free synchronization that isn't present.
-pub(crate) struct MainCell<T>(Cell<T>);
+pub(crate) struct MainCell<T>(RefCell<T>);
 
 // SAFETY: Every access requires a `MainThread`, and `MainThread` is `!Send + !Sync`,
 // so neither a witness nor a reference to one can reach another thread.
@@ -76,24 +78,43 @@ unsafe impl<T> Sync for MainCell<T> {}
 
 impl<T> MainCell<T> {
     pub(crate) const fn new(value: T) -> Self {
-        Self(Cell::new(value))
+        Self(RefCell::new(value))
+    }
+
+    /// Borrows the contents for one access. Aborts the process if [`MainCell::with`] is currently holding the contents.
+    #[track_caller]
+    fn borrow_mut(&self) -> RefMut<'_, T> {
+        self.0
+            .try_borrow_mut()
+            .unwrap_or_else(|_| fatal!("main-thread cell re-entered at {}", Location::caller()))
     }
 
     /// Drops the previous contents in place.
+    #[track_caller]
     pub(crate) fn set(&self, _thread: MainThread, value: T) {
-        self.0.set(value);
+        *self.borrow_mut() = value;
     }
 
-    /// Swaps in `value` and returns the previous contents.
-    #[must_use]
-    pub(crate) fn replace(&self, _thread: MainThread, value: T) -> T {
-        self.0.replace(value)
+    /// Runs `f` on the contents in place, returning its result.
+    #[track_caller]
+    pub(crate) fn with<R>(&self, _thread: MainThread, f: impl FnOnce(&mut T) -> R) -> R {
+        f(&mut self.borrow_mut())
     }
 }
 
 impl<T: Copy> MainCell<T> {
+    #[track_caller]
     pub(crate) fn get(&self, _thread: MainThread) -> T {
-        self.0.get()
+        *self.borrow_mut()
+    }
+}
+
+impl<T: Default> MainCell<T> {
+    /// Takes the contents, leaving the default value.
+    #[must_use]
+    #[track_caller]
+    pub(crate) fn take(&self, _thread: MainThread) -> T {
+        take(&mut *self.borrow_mut())
     }
 }
 
@@ -147,7 +168,19 @@ mod tests {
 
         assert_eq!(CELL.get(thread), 1);
         CELL.set(thread, 5);
-        assert_eq!(CELL.replace(thread, 7), 5);
-        assert_eq!(CELL.get(thread), 7);
+        assert_eq!(CELL.get(thread), 5);
+    }
+
+    #[test]
+    fn cell_with_in_place() {
+        static CELL: MainCell<Vec<u32>> = MainCell::new(Vec::new());
+
+        let _claim = MainClaim::acquire();
+
+        let thread = MainThread::claim();
+        CELL.with(thread, |v| v.extend([1, 2]));
+        assert_eq!(CELL.with(thread, Vec::pop), Some(2));
+        assert_eq!(CELL.take(thread), [1]);
+        assert!(CELL.take(thread).is_empty());
     }
 }

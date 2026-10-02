@@ -1,10 +1,11 @@
 //! Serialization of game state into observation payloads.
 //!
-//! A payload is a [`META_WORDS`]-word meta block followed by six entity sections. Each section has a `count` field of type `u32`
-//! followed by `count` rows of the matching [`SECTION_WIDTHS`] entry. Every field is 4 bytes little-endian so the entire payload
-//! can parse as an array with 4-byte elements. Enemy `max_hp` / `invuln_frames` and item `kind` are `f32` so rows are homogenous
-//! and parsing is easier. These values are still exact below 2^24. Flag words are split into their low and high 16 bits,
-//! each exact as an `f32`.
+//! A payload is a [`META_WORDS`]-word meta block followed by six entity sections and the input log.
+//! Each section has a `count` field of type `u32` followed by `count` rows of the matching [`SECTION_WIDTHS`] entry.
+//! The input log is a `count` followed by `count` rows of [`INPUT_WIDTH`] `u32`s.
+//! Every field is 4 bytes little-endian, so the entire payload can parse as an array with 4-byte elements.
+//! Enemy `max_hp` / `invuln_frames` and item `kind` are `f32` so rows are homogenous and parsing is easier.
+//! These values are still exact below 2^24. Flag words are split into their low and high 16 bits, each exact as an `f32`.
 
 use crate::practice::WireMeta;
 use crate::reader::{
@@ -12,6 +13,11 @@ use crate::reader::{
 };
 
 const META_WORDS: usize = 32;
+
+const INPUT_WIDTH: usize = 2;
+/// An input log row.
+pub(crate) type InputRecord = [u32; INPUT_WIDTH];
+
 /// Bullets; enemies; items; segment lasers; ray lasers; curve laser points.
 const SECTION_WIDTHS: [usize; 6] = [
     Bullet::WIDTH,
@@ -22,10 +28,6 @@ const SECTION_WIDTHS: [usize; 6] = [
     CurvePoint::WIDTH,
 ];
 
-/// Bit in the frame flags word to indicate that the hook rewrote the controller's action on at least one frame
-/// since the previous exchange. This is set on the observation following the overridden frames.
-const FLAG_INPUT_OVERRIDDEN: u32 = 1 << 31;
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Scene {
     Other = 0,
@@ -33,16 +35,21 @@ pub(crate) enum Scene {
     InGame = 2,
 }
 
-pub(crate) struct Meta {
+pub(crate) struct Meta<'a> {
     pub(crate) step: u32,
     pub(crate) scene: Scene,
     pub(crate) wire: WireMeta,
-    /// Sets [`FLAG_INPUT_OVERRIDDEN`] in the frame flags word.
-    pub(crate) overrode_input: bool,
+    /// Inputs read by the game on each live stage frame of the current load since the previous exchange.
+    pub(crate) inputs: &'a [InputRecord],
 }
 
 /// Appends the observation payload to `buf`.
-pub(crate) fn build(buf: &mut Vec<u8>, state: Option<&GameState>, meta: &Meta, res: &Resources) {
+pub(crate) fn build(
+    buf: &mut Vec<u8>,
+    state: Option<&GameState>,
+    meta: &Meta<'_>,
+    res: &Resources,
+) {
     let rows = state.map_or(0, |s| {
         s.bullets.len() * Bullet::WIDTH
             + s.enemies.len() * Enemy::WIDTH
@@ -51,7 +58,9 @@ pub(crate) fn build(buf: &mut Vec<u8>, state: Option<&GameState>, meta: &Meta, r
             + s.lasers.rays.len() * RayLaser::WIDTH
             + s.lasers.curve_points.len() * CurvePoint::WIDTH
     });
-    buf.reserve(4 * (META_WORDS + SECTION_WIDTHS.len() + rows));
+    buf.reserve(
+        4 * (META_WORDS + SECTION_WIDTHS.len() + rows + 1 + INPUT_WIDTH * meta.inputs.len()),
+    );
 
     let start = buf.len();
     put_meta(buf, state, meta, res);
@@ -61,19 +70,25 @@ pub(crate) fn build(buf: &mut Vec<u8>, state: Option<&GameState>, meta: &Meta, r
         "meta block width must match META_WORDS",
     );
 
-    let Some(state) = state else {
+    if let Some(state) = state {
+        put_section(buf, &state.bullets, Bullet::cells);
+        put_section(buf, &state.enemies, Enemy::cells);
+        put_section(buf, &state.items, Item::cells);
+        put_section(buf, &state.lasers.segments, SegmentLaser::cells);
+        put_section(buf, &state.lasers.rays, RayLaser::cells);
+        put_section(buf, &state.lasers.curve_points, CurvePoint::cells);
+    } else {
         for _ in SECTION_WIDTHS {
             put_count(buf, 0);
         }
-        return;
-    };
+    }
 
-    put_section(buf, &state.bullets, Bullet::cells);
-    put_section(buf, &state.enemies, Enemy::cells);
-    put_section(buf, &state.items, Item::cells);
-    put_section(buf, &state.lasers.segments, SegmentLaser::cells);
-    put_section(buf, &state.lasers.rays, RayLaser::cells);
-    put_section(buf, &state.lasers.curve_points, CurvePoint::cells);
+    put_count(buf, meta.inputs.len());
+    for row in meta.inputs {
+        for &word in row {
+            put_u32(buf, word);
+        }
+    }
 }
 
 #[expect(clippy::cast_possible_truncation)]
@@ -183,7 +198,7 @@ impl CurvePoint {
     }
 }
 
-fn put_meta(buf: &mut Vec<u8>, state: Option<&GameState>, meta: &Meta, res: &Resources) {
+fn put_meta(buf: &mut Vec<u8>, state: Option<&GameState>, meta: &Meta<'_>, res: &Resources) {
     put_u32(buf, meta.step);
     put_u32(buf, meta.scene as u32);
     put_u32(buf, state.is_some().into());
@@ -192,12 +207,7 @@ fn put_meta(buf: &mut Vec<u8>, state: Option<&GameState>, meta: &Meta, res: &Res
     put_u32(buf, meta.wire.reset_outcome as u32);
     put_u32(buf, meta.wire.applied_section);
     put_u32(buf, meta.wire.hits);
-    let frame_flags = if meta.overrode_input {
-        FLAG_INPUT_OVERRIDDEN
-    } else {
-        0
-    };
-    put_u32(buf, frame_flags);
+    put_u32(buf, meta.wire.entry_count);
     put_u32(buf, res.game_tick);
     put_u32(buf, res.score_div10);
     put_i32(buf, res.graze);
@@ -258,7 +268,7 @@ fn put_count(buf: &mut Vec<u8>, n: usize) {
 
 #[cfg(test)]
 mod tests {
-    use super::{FLAG_INPUT_OVERRIDDEN, META_WORDS, Meta, Resources, SECTION_WIDTHS, Scene, build};
+    use super::{INPUT_WIDTH, META_WORDS, Meta, Resources, SECTION_WIDTHS, Scene, build};
     use crate::practice::{Generation, Outcome, WireMeta};
     use crate::reader::{Bullet, CurvePoint, Enemy, GameState, Item, Lasers, Player, SegmentLaser};
 
@@ -285,13 +295,15 @@ mod tests {
         }
     }
 
-    fn payload_len(counts: [usize; 6]) -> usize {
+    fn payload_len(counts: [usize; 6], inputs: usize) -> usize {
         4 * (META_WORDS
             + counts
                 .iter()
                 .zip(SECTION_WIDTHS)
                 .map(|(count, width)| 1 + count * width)
-                .sum::<usize>())
+                .sum::<usize>()
+            + 1
+            + INPUT_WIDTH * inputs)
     }
 
     fn wire_for_test() -> WireMeta {
@@ -301,15 +313,16 @@ mod tests {
             reset_outcome: Outcome::Idle,
             applied_section: 0,
             hits: 0,
+            entry_count: 0,
         }
     }
 
-    fn meta_for_test() -> Meta {
+    fn meta_for_test() -> Meta<'static> {
         Meta {
             step: 0,
             scene: Scene::Menu,
             wire: wire_for_test(),
-            overrode_input: false,
+            inputs: &[],
         }
     }
 
@@ -341,12 +354,13 @@ mod tests {
                     reset_outcome: Outcome::Pending,
                     applied_section: 1201,
                     hits: 3,
+                    entry_count: 2,
                 },
-                overrode_input: true,
+                inputs: &[[6, 0x11], [7, 0x201]],
             },
             &resources(),
         );
-        assert_eq!(buf.len(), payload_len([0; 6]));
+        assert_eq!(buf.len(), payload_len([0; 6], 2));
         assert_eq!(u32_at(&buf, 0), 42); // step
         assert_eq!(u32_at(&buf, 1), Scene::Menu as u32); // scene
         assert_eq!(u32_at(&buf, 2), 0); // in_stage
@@ -355,7 +369,7 @@ mod tests {
         assert_eq!(u32_at(&buf, 5), 1); // reset_outcome
         assert_eq!(u32_at(&buf, 6), 1201); // applied_section
         assert_eq!(u32_at(&buf, 7), 3); // hits
-        assert_eq!(u32_at(&buf, 8), FLAG_INPUT_OVERRIDDEN); // frame flags
+        assert_eq!(u32_at(&buf, 8), 2); // entry count
         assert_eq!(u32_at(&buf, 9), 1234); // game_tick
         assert_eq!(u32_at(&buf, 10), 567); // score_div10
         assert_eq!(i32_at(&buf, 11), 89); // graze
@@ -377,6 +391,13 @@ mod tests {
         for section in 0..6 {
             assert_eq!(u32_at(&buf, META_WORDS + section), 0);
         }
+        // input log
+        let log = META_WORDS + 6;
+        assert_eq!(u32_at(&buf, log), 2);
+        assert_eq!(
+            [1, 2, 3, 4].map(|i| u32_at(&buf, log + i)),
+            [6, 0x11, 7, 0x201]
+        );
     }
 
     #[test]
@@ -470,11 +491,10 @@ mod tests {
             },
             &resources(),
         );
-        assert_eq!(buf.len(), payload_len([1, 1, 1, 1, 0, 2]));
+        assert_eq!(buf.len(), payload_len([1, 1, 1, 1, 0, 2], 0));
         assert_eq!(u32_at(&buf, 2), 1); // in_stage
         assert_eq!(u32_at(&buf, 3), 2); // load_generation
         assert_eq!(u32_at(&buf, 7), 1); // hits
-        assert_eq!(u32_at(&buf, 8), 0); // frame flags
         assert_eq!(u32_at(&buf, 18), 0xBEEF); // rng_state
         // player block
         assert_eq!(f32_at(&buf, 27), -100.5);
@@ -525,5 +545,8 @@ mod tests {
         assert_eq!(f32_at(&buf, word + 5), 48.);
         assert_eq!(f32_at(&buf, word + 6), 44.);
         assert_eq!(f32_at(&buf, word + 10), 48.);
+        // input log
+        word += 1 + 2 * 5;
+        assert_eq!(u32_at(&buf, word), 0);
     }
 }

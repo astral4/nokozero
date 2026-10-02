@@ -124,6 +124,7 @@ impl<T: Copy> PerLoad<T> {
     }
 
     /// Returns the value if it was stored under `generation`. Otherwise, returns the fresh value.
+    #[track_caller]
     pub(super) fn get(&self, thread: MainThread, generation: Generation) -> T {
         match self.cell.get(thread) {
             Some((stamp, value)) if stamp == generation => value,
@@ -132,6 +133,7 @@ impl<T: Copy> PerLoad<T> {
     }
 
     /// Stores `value` as belonging to `generation`.
+    #[track_caller]
     pub(super) fn set(&self, thread: MainThread, generation: Generation, value: T) {
         self.cell.set(thread, Some((generation, value)));
     }
@@ -139,6 +141,7 @@ impl<T: Copy> PerLoad<T> {
     /// Runs `f` on the current value if it belongs to `generation`. Otherwise, runs `f` on the fresh value.
     /// If `f` returns `Some(_)`, then modifications to `f`'s input are stored back as the new cell value.
     /// If `f` returns `None`, then any modifications are discarded and the cell value is left untouched.
+    #[track_caller]
     pub(super) fn update<R>(
         &self,
         thread: MainThread,

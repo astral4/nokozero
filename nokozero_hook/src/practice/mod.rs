@@ -14,26 +14,29 @@ pub(crate) use crate::practice::hit::take_forced_step;
 pub(crate) use crate::practice::load::Generation;
 pub(crate) use crate::practice::machine::Outcome;
 
+use crate::READ_INTERVAL;
 use crate::addrs::{
-    BOMB_FRAGMENTS_VA, BOMBS_VA, CHARACTER_VA, DIFFICULTY_VA, GAME_THREAD_PTR_VA, GAMEMODE_INGAME,
-    GAMEMODE_RETRY, GAMEMODE_TO_SWITCH_TO_VA, GLOBALS_INNER_LEN, GLOBALS_VA, GRAZE_VA, GUI_PTR_VA,
-    LIFE_FRAGMENTS_VA, LIVES_VA, LOADER_RUNNING_VA, PLAYER_PTR_VA, POWER_VA, RNG_COUNT_VA,
-    RNG_UNSAFE_VA, RNG_VA, SCORE_DIV10_VA, STAGE_CURRENT_VA, STAGE_SELECT_VA, VALUE_VA,
+    BOMB_FRAGMENTS_VA, BOMBS_VA, CHARACTER_VA, CURRENT_CHAPTER_VA, DIFFICULTY_VA,
+    GAME_THREAD_PTR_VA, GAMEMODE_INGAME, GAMEMODE_RETRY, GAMEMODE_TO_SWITCH_TO_VA,
+    GLOBALS_INNER_LEN, GLOBALS_VA, GRAZE_VA, GUI_PTR_VA, LIFE_FRAGMENTS_VA, LIVES_VA,
+    LOADER_RUNNING_VA, PLAYER_PTR_VA, POWER_VA, RNG_COUNT_VA, RNG_UNSAFE_VA, RNG_VA,
+    SCORE_DIV10_VA, STAGE_CURRENT_VA, STAGE_SELECT_VA, VALUE_VA,
 };
 use crate::log::fatal;
 use crate::mem::{game_live, read, read_ptr, stage_stable, write};
 use crate::patch::{NearBranchSite, Site, op_abs32};
 use crate::practice::catalog::apply_section;
-use crate::practice::data::{EXTRA_DIFFICULTY, rank_matches_stage, section_mapped, section_stage};
+use crate::practice::chapter::{count_chapter, entry_count};
+use crate::practice::data::{EXTRA_DIFFICULTY, rank_matches_stage, section_stage};
 use crate::practice::ecl::{Ecl, EclUndo};
 use crate::practice::hit::count;
 use crate::practice::load::{HANDOFF, LoadStatus, PerLoad, load_generation};
 use crate::practice::machine::{Lifecycle, ReloadPlan, TickDecision};
 use crate::thread::{MainCell, MainThread, MainToken};
-use crate::{Action, READ_INTERVAL};
 use std::arch::naked_asm;
 use std::ffi::c_void;
 use std::mem::transmute;
+use std::panic::Location;
 use std::ptr::{copy_nonoverlapping, with_exposed_provenance, with_exposed_provenance_mut};
 
 #[derive(Clone, Copy)]
@@ -59,35 +62,15 @@ pub(crate) struct PracticeParams {
     rng_seed: u16,
     /// Game frames per RL step for this episode (1-[`MAX_STEP_INTERVAL`]).
     step_interval: u32,
-    /// Episode behavior flags; see the `FLAG_*` constants.
-    flags: u32,
-    /// The action held from the reset's acceptance until the driver's first ACT.
-    initial_action: u32,
+    /// Whether hits run the game's own death sequence instead of being suppressed. Hits are still counted.
+    real_deaths: bool,
     /// The player's position on the stage's first frame.
     player_x: f32,
     player_y: f32,
 }
 
-impl PracticeParams {
-    pub(crate) fn initial_action(&self) -> u32 {
-        self.initial_action
-    }
-
-    pub(crate) fn has_flag(&self, flag: u32) -> bool {
-        self.flags & flag != 0
-    }
-}
-
 /// The slowest supported control rate (one decision per second).
 pub(crate) const MAX_STEP_INTERVAL: u32 = 60;
-
-/// Leave dialogue to the controller instead of skipping it. The controller's action, `SKIP` included, reaches the game unchanged.
-/// This is needed to replay human inputs that follow their own dialogue timing.
-pub(crate) const FLAG_RAW_DIALOGUE: u32 = 1 << 0;
-/// Let hits run the game's own death sequence instead of suppressing it. Hits are still counted.
-pub(crate) const FLAG_REAL_DEATHS: u32 = 1 << 1;
-pub(crate) const FLAG_RECORD: u32 = 1 << 2;
-const KNOWN_FLAGS: u32 = FLAG_RAW_DIALOGUE | FLAG_REAL_DEATHS | FLAG_RECORD;
 
 pub(crate) const RECORD_LEN: usize = 0x238 + 0xa4;
 const RECORD_GLOBALS: usize = 0x14;
@@ -99,16 +82,26 @@ const GAME_THREAD_INNER_LEN: usize = 0x6c;
 /// A stage record plus its run's info block.
 pub(crate) struct StageRecord(pub(crate) [u8; RECORD_LEN]);
 
-/// The record of the reset in flight, taken when the reset is consumed.
-/// The value is `Some` iff the pending reset's params carry [`FLAG_RECORD`].
-static PENDING_RECORD: MainCell<Option<Box<StageRecord>>> = MainCell::new(None);
+impl StageRecord {
+    /// The stage that the record starts from.
+    fn stage(&self) -> u32 {
+        u32::from(u16::from_le_bytes([self.0[0], self.0[1]]))
+    }
 
-/// Stores the record carried by a just-accepted RESET.
-pub(crate) fn stash_record(thread: MainThread, record: Option<Box<StageRecord>>) {
-    PENDING_RECORD.set(thread, record);
+    /// Whether `params` start the stage that the record was recorded in.
+    pub(crate) fn fits(&self, params: &PracticeParams) -> bool {
+        params.active && section_stage(params.section) == Some(self.stage())
+    }
+
+    /// The player's position on the record's first frame, in 1/128 units.
+    fn position(&self) -> [i32; 2] {
+        let word = |at| i32::from_le_bytes(self.0[at..at + 4].try_into().unwrap());
+        [word(RECORD_PLAYER_POS), word(RECORD_PLAYER_POS + 4)]
+    }
 }
 
-#[repr(C)]
+/// The RESET params block.
+#[repr(C, packed(4))]
 struct WireParams {
     section: u32,
     active: u32,
@@ -125,23 +118,19 @@ struct WireParams {
     character: i32,
     rng_seed: u32,
     step_interval: u32,
-    flags: u32,
-    initial_action: u32,
+    real_deaths: u32,
     player_x: f32,
     player_y: f32,
 }
 
 pub(crate) const PARAMS_LEN: usize = size_of::<WireParams>();
 
-const _: () = assert!(PARAMS_LEN == 80, "wire params block is fixed at 80 bytes");
+const _: () = assert!(PARAMS_LEN == 76, "wire params block is fixed at 76 bytes");
 
 impl PracticeParams {
     /// Validates and decodes a RESET command's params block. Returns `None` if there is a protocol violation.
-    pub(crate) fn parse(payload: &[u8]) -> Option<Self> {
-        if payload.len() != size_of::<WireParams>() {
-            return None;
-        }
-        // SAFETY: The length check guarantees `size_of::<WireParams>()` readable bytes.
+    pub(crate) fn parse(payload: &[u8; PARAMS_LEN]) -> Option<Self> {
+        // SAFETY: The array contains `size_of::<WireParams>()` readable bytes.
         // `WireParams` has only integer fields, so every bit pattern is valid. `read_unaligned` tolerates the buffer's alignment.
         let wire = unsafe { payload.as_ptr().cast::<WireParams>().read_unaligned() };
 
@@ -158,21 +147,15 @@ impl PracticeParams {
         if !(1..=MAX_STEP_INTERVAL).contains(&wire.step_interval) {
             return None;
         }
-        if wire.flags & !KNOWN_FLAGS != 0 {
-            return None;
-        }
-        Action::from_wire(wire.initial_action)?;
+        let active = wire_bool(wire.active)?;
+        let real_deaths = wire_bool(wire.real_deaths)?;
         if !(wire.player_x.is_finite() && wire.player_y.is_finite()) {
             return None;
         }
 
-        let active = wire.active != 0;
         if active {
             let stage = section_stage(wire.section)?;
             if !rank_matches_stage(stage, difficulty) {
-                return None;
-            }
-            if !section_mapped(wire.section, wire.phase) {
                 return None;
             }
         }
@@ -205,11 +188,19 @@ impl PracticeParams {
             bomb_fragments,
             rng_seed,
             step_interval: wire.step_interval,
-            flags: wire.flags,
-            initial_action: wire.initial_action,
+            real_deaths,
             player_x: wire.player_x,
             player_y: wire.player_y,
         })
+    }
+}
+
+/// Decodes a Boolean value.
+fn wire_bool(word: u32) -> Option<bool> {
+    match word {
+        0 => Some(false),
+        1 => Some(true),
+        _ => None,
     }
 }
 
@@ -223,9 +214,10 @@ struct LiveWarp {
 static LIFECYCLE: MainCell<Option<Lifecycle>> = MainCell::new(Some(Lifecycle::INIT));
 
 /// Checks the lifecycle out of its cell for the duration of `f`, aborting if it is already checked out.
+#[track_caller]
 fn with_lifecycle<R>(thread: MainThread, f: impl FnOnce(&mut Lifecycle) -> R) -> R {
-    let Some(mut lc) = LIFECYCLE.replace(thread, None) else {
-        fatal!("lifecycle re-entered");
+    let Some(mut lc) = LIFECYCLE.take(thread) else {
+        fatal!("lifecycle re-entered at {}", Location::caller());
     };
     let result = f(&mut lc);
     LIFECYCLE.set(thread, Some(lc));
@@ -238,10 +230,20 @@ pub(crate) fn observe_loads(thread: MainThread) {
     with_lifecycle(thread, |lc| lc.observe(status));
 }
 
-/// Accepts a decoded RESET command. Returns `false` if a reset is already pending.
+/// Accepts a decoded RESET command and its stage record. Returns `false` if a reset is already pending.
 #[must_use]
-pub(crate) fn accept_reset(thread: MainThread, seq: u32, params: PracticeParams) -> bool {
-    with_lifecycle(thread, |lc| lc.accept(seq, params))
+pub(crate) fn accept_reset(
+    thread: MainThread,
+    seq: u32,
+    params: PracticeParams,
+    record: Option<Box<StageRecord>>,
+) -> bool {
+    with_lifecycle(thread, |lc| lc.accept(seq, params, record))
+}
+
+/// Whether a reset has been accepted and not yet landed.
+pub(crate) fn reset_pending(thread: MainThread) -> bool {
+    with_lifecycle(thread, |lc| lc.reset_pending())
 }
 
 /// Starts a requested reset's reload. The request remains pending unless the game is in stable gameplay,
@@ -292,6 +294,8 @@ pub(crate) struct WireMeta {
     pub(crate) reset_outcome: Outcome,
     pub(crate) applied_section: u32,
     pub(crate) hits: u32,
+    /// How many times the load has entered its current chapter word.
+    pub(crate) entry_count: u32,
 }
 
 impl WireMeta {
@@ -305,6 +309,7 @@ impl WireMeta {
             reset_outcome,
             applied_section,
             hits: count(thread, load_generation),
+            entry_count: entry_count(thread, load_generation),
         }
     }
 }
@@ -380,12 +385,12 @@ fn guard_tick(thread: MainThread, lc: &mut Lifecycle, status: LoadStatus) -> boo
 
     unsafe { revert_previous_warp(token, stage, lc.last_warp_mut()) };
 
+    let record = lc.take_record();
     let (outcome, section) = if params.active {
         unsafe { apply_warp(token, stage, generation, &params, lc.last_warp_mut()) }
     } else {
         (Outcome::Vanilla, 0)
     };
-    let record = PENDING_RECORD.replace(thread, None);
     // This frame's input hook placed the player before the player's own update (see `place_before_consume`),
     // so that update has already moved it from the start position. Holding this one tick makes the next frame the stage's first.
     let landed = matches!(outcome, Outcome::Applied | Outcome::Vanilla);
@@ -396,7 +401,7 @@ fn guard_tick(thread: MainThread, lc: &mut Lifecycle, status: LoadStatus) -> boo
         }
         write_rng(token, params.rng_seed);
         STEP_INTERVAL.set(thread, generation, params.step_interval);
-        FLAGS.set(thread, generation, params.flags);
+        REAL_DEATHS.set(thread, generation, params.real_deaths);
     }
     lc.finish_reload(generation, outcome, section);
     !landed
@@ -458,11 +463,12 @@ unsafe fn apply_warp(
     (Outcome::Applied, params.section)
 }
 
-/// Writes the reset's starting resources.
+/// Writes the reset's starting resources and clears the chapter word that a fresh stage starts with.
 fn write_resources(token: MainToken, p: &PracticeParams) {
     // `PracticeParams::parse` clamped these, so `score / 10` and `value * 100` fit in 32-bit words.
     #[expect(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
     unsafe {
+        write(token, CURRENT_CHAPTER_VA, 0u32);
         write(token, SCORE_DIV10_VA, (p.score / 10) as u32);
         write(token, GRAZE_VA, p.graze as u32);
         write(token, VALUE_VA, (p.value * 100) as u32);
@@ -500,19 +506,7 @@ unsafe fn apply_record(_token: MainToken, record: &StageRecord) {
 /// Returns the player's start position for a reset, in 1/128 units.
 fn start_position(params: &PracticeParams, record: Option<&StageRecord>) -> [i32; 2] {
     if let Some(record) = record {
-        let bytes = &record.0;
-        return [
-            i32::from_le_bytes(
-                bytes[RECORD_PLAYER_POS..RECORD_PLAYER_POS + 4]
-                    .try_into()
-                    .unwrap(),
-            ),
-            i32::from_le_bytes(
-                bytes[RECORD_PLAYER_POS + 4..RECORD_PLAYER_POS + 8]
-                    .try_into()
-                    .unwrap(),
-            ),
-        ];
+        return record.position();
     }
     #[expect(clippy::cast_possible_truncation)]
     [
@@ -526,12 +520,12 @@ fn start_position(params: &PracticeParams, record: Option<&StageRecord>) -> [i32
 pub(crate) fn place_before_consume(token: MainToken) {
     let thread = token.thread();
     let status = HANDOFF.status();
-    let Some(params) = with_lifecycle(thread, |lc| lc.pending_consume(status)) else {
+    let Some(position) = with_lifecycle(thread, |lc| {
+        lc.pending_consume(status)
+            .map(|params| start_position(&params, lc.record()))
+    }) else {
         return;
     };
-    let record = PENDING_RECORD.replace(thread, None);
-    let position = start_position(&params, record.as_deref());
-    PENDING_RECORD.set(thread, record);
     if place_player(token, position) {
         with_lifecycle(thread, Lifecycle::mark_placed);
     }
@@ -570,18 +564,26 @@ static STAGE_FRAMES: PerLoad<u32> = PerLoad::new(0);
 /// Game frames per RL step for the current load.
 static STEP_INTERVAL: PerLoad<u32> = PerLoad::new(READ_INTERVAL);
 
-/// The current load's episode flags (`FLAG_*`).
-static FLAGS: PerLoad<u32> = PerLoad::new(0);
+/// Whether hits run the game's own death sequence in the current load.
+static REAL_DEATHS: PerLoad<bool> = PerLoad::new(false);
 
-/// Returns whether the current load has `flag` set.
-pub(crate) fn episode_flag(thread: MainThread, flag: u32) -> bool {
-    FLAGS.get(thread, load_generation()) & flag != 0
+/// Returns whether hits run the game's own death sequence in the current load.
+pub(crate) fn real_deaths(thread: MainThread) -> bool {
+    REAL_DEATHS.get(thread, load_generation())
 }
 
-/// Counts this frame as a live stage frame of the current load and returns whether an RL step is due on it.
+/// A live stage frame of the current load.
+#[derive(Clone, Copy)]
+pub(crate) struct StageFrame {
+    pub(crate) index: u32,
+    /// Whether an RL step is due on this frame.
+    pub(crate) due: bool,
+}
+
+/// Counts this frame as a live stage frame of the current load. Also counts its shown chapter word.
 /// Returns `None` outside a live stage or until the tick guard has consumed the latest load.
 /// This should be called exactly once per input-hook frame.
-pub(crate) fn stage_step_due(thread: MainThread) -> Option<bool> {
+pub(crate) fn stage_frame(thread: MainThread) -> Option<StageFrame> {
     if !unsafe { game_live() } {
         return None;
     }
@@ -589,11 +591,12 @@ pub(crate) fn stage_step_due(thread: MainThread) -> Option<bool> {
     if with_lifecycle(thread, |lc| lc.wire().0) != generation {
         return None;
     }
-    let interval = STEP_INTERVAL.get(thread, generation);
-    STAGE_FRAMES.update(thread, generation, |count| {
-        let index = *count;
-        *count = count.wrapping_add(1);
-        Some(index.is_multiple_of(interval))
+    let index = STAGE_FRAMES.get(thread, generation);
+    STAGE_FRAMES.set(thread, generation, index.wrapping_add(1));
+    count_chapter(thread, generation, index);
+    Some(StageFrame {
+        index,
+        due: index.is_multiple_of(STEP_INTERVAL.get(thread, generation)),
     })
 }
 
@@ -644,13 +647,23 @@ pub(crate) unsafe fn install() {
 }
 
 #[cfg(test)]
-mod test_support {
+pub(crate) mod test_support {
     use super::{PARAMS_LEN, PracticeParams, WireParams};
     use std::mem::transmute;
 
     /// Returns a valid `PARAMS_LEN`-byte params block with the given categorical selectors.
-    pub(super) fn wire_bytes(section: u32, active: u32, phase: u32) -> [u8; PARAMS_LEN] {
-        let wire = WireParams {
+    pub(crate) fn wire_bytes(section: u32, active: u32, phase: u32) -> [u8; PARAMS_LEN] {
+        wire_with(section, active, phase, |_| {})
+    }
+
+    /// Returns [`wire_bytes`]'s block with `edit` applied to its fields.
+    pub(super) fn wire_with(
+        section: u32,
+        active: u32,
+        phase: u32,
+        edit: impl FnOnce(&mut WireParams),
+    ) -> [u8; PARAMS_LEN] {
+        let mut wire = WireParams {
             section,
             active,
             score: 0,
@@ -666,12 +679,13 @@ mod test_support {
             character: 0,
             rng_seed: 0xBEEF,
             step_interval: 3,
-            flags: 0,
-            initial_action: 0,
+            real_deaths: 0,
             player_x: 0.0,
             player_y: 400.0,
         };
-        // SAFETY: `WireParams` is `#[repr(C)]` with only integer fields and no padding, so every byte is initialized.
+        edit(&mut wire);
+        // SAFETY: `WireParams` is `#[repr(C, packed(4))]` with only 4-byte and 8-byte plain fields.
+        // There is no padding, so every byte is initialized.
         unsafe { transmute(wire) }
     }
 
@@ -687,16 +701,21 @@ mod test_support {
         phase: u32,
         difficulty: i32,
     ) -> PracticeParams {
-        let mut bytes = wire_bytes(section, active, phase);
-        bytes[48..52].copy_from_slice(&difficulty.to_le_bytes());
-        PracticeParams::parse(&bytes).expect("valid params")
+        PracticeParams::parse(&wire_with(section, active, phase, |w| {
+            w.difficulty = difficulty;
+        }))
+        .expect("valid params")
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::test_support::{params, wire_bytes};
-    use super::{KNOWN_FLAGS, MAX_STEP_INTERVAL, PARAMS_LEN, PracticeParams};
+    use super::test_support::{params, wire_bytes, wire_with};
+    use super::{MAX_STEP_INTERVAL, PracticeParams};
+
+    fn parse_with(edit: impl FnOnce(&mut super::WireParams)) -> Option<PracticeParams> {
+        PracticeParams::parse(&wire_with(1202, 1, 0, edit))
+    }
 
     #[test]
     fn parse_accept_valid_params() {
@@ -708,40 +727,25 @@ mod tests {
     }
 
     #[test]
-    fn parse_length_exact() {
-        let bytes = wire_bytes(1202, 1, 0);
-        assert!(PracticeParams::parse(&bytes[..PARAMS_LEN - 1]).is_none());
-        let mut long = bytes.to_vec();
-        long.push(0);
-        assert!(PracticeParams::parse(&long).is_none());
+    fn parse_leave_unmapped_targets_to_reload() {
+        assert_eq!(params(1205, 1, 0).section, 1205);
+        assert_eq!(params(1202, 1, 9).phase, 9);
     }
 
     #[test]
     fn parse_reject_out_of_range_selectors() {
         // Difficulty 5 does not exist.
-        let mut bytes = wire_bytes(1202, 1, 0);
-        bytes[48..52].copy_from_slice(&5i32.to_le_bytes());
-        assert!(PracticeParams::parse(&bytes).is_none());
+        assert!(parse_with(|w| w.difficulty = 5).is_none());
         // Stage 9 does not exist.
         assert!(PracticeParams::parse(&wire_bytes(9101, 1, 0)).is_none());
     }
 
     #[test]
     fn parse_extra_stage_and_difficulty() {
-        let mut bytes = wire_bytes(7201, 1, 0);
-
-        assert!(PracticeParams::parse(&bytes).is_none());
-
-        bytes[48..52].copy_from_slice(&4i32.to_le_bytes());
-        assert!(PracticeParams::parse(&bytes).is_some());
-
-        let mut bytes = wire_bytes(1202, 1, 0);
-        bytes[48..52].copy_from_slice(&4i32.to_le_bytes());
-        assert!(PracticeParams::parse(&bytes).is_none());
-
-        let mut bytes = wire_bytes(0, 0, 0);
-        bytes[48..52].copy_from_slice(&4i32.to_le_bytes());
-        assert!(PracticeParams::parse(&bytes).is_some());
+        assert!(PracticeParams::parse(&wire_bytes(7201, 1, 0)).is_none());
+        assert!(PracticeParams::parse(&wire_with(7201, 1, 0, |w| w.difficulty = 4)).is_some());
+        assert!(parse_with(|w| w.difficulty = 4).is_none());
+        assert!(PracticeParams::parse(&wire_with(0, 0, 0, |w| w.difficulty = 4)).is_some());
     }
 
     #[test]
@@ -753,60 +757,51 @@ mod tests {
 
     #[test]
     fn parse_reject_wide_rng_seed() {
-        let mut bytes = wire_bytes(1202, 1, 0);
-        assert_eq!(PracticeParams::parse(&bytes).unwrap().rng_seed, 0xBEEF);
-        bytes[56..60].copy_from_slice(&0x1_0000u32.to_le_bytes());
-        assert!(PracticeParams::parse(&bytes).is_none());
-        bytes[56..60].copy_from_slice(&0xFFFFu32.to_le_bytes());
-        assert_eq!(PracticeParams::parse(&bytes).unwrap().rng_seed, 0xFFFF);
+        assert_eq!(parse_with(|_| {}).unwrap().rng_seed, 0xBEEF);
+        assert!(parse_with(|w| w.rng_seed = 0x1_0000).is_none());
+        assert_eq!(
+            parse_with(|w| w.rng_seed = 0xFFFF).unwrap().rng_seed,
+            0xFFFF
+        );
     }
 
     #[test]
     fn parse_reject_non_finite_player_position() {
-        let mut bytes = wire_bytes(1202, 1, 0);
-        assert!(PracticeParams::parse(&bytes).is_some());
-        bytes[72..76].copy_from_slice(&f32::NAN.to_le_bytes());
-        assert!(PracticeParams::parse(&bytes).is_none());
+        assert!(parse_with(|_| {}).is_some());
+        assert!(parse_with(|w| w.player_y = f32::NAN).is_none());
+        assert!(parse_with(|w| w.player_x = f32::INFINITY).is_none());
     }
 
     #[test]
-    fn parse_reject_initial_action_outside_mask() {
-        let mut bytes = wire_bytes(1202, 1, 0);
-        bytes[68..72].copy_from_slice(&0x9u32.to_le_bytes());
-        assert_eq!(PracticeParams::parse(&bytes).unwrap().initial_action(), 0x9);
-        bytes[68..72].copy_from_slice(&0x100u32.to_le_bytes());
-        assert!(PracticeParams::parse(&bytes).is_none());
+    fn record_specify_stage() {
+        let mut bytes = [0u8; super::RECORD_LEN];
+        bytes[0] = 3;
+        assert_eq!(super::StageRecord(bytes).stage(), 3);
     }
 
     #[test]
-    fn parse_reject_unknown_flags() {
-        let mut bytes = wire_bytes(1202, 1, 0);
-        bytes[64..68].copy_from_slice(&KNOWN_FLAGS.to_le_bytes());
-        assert_eq!(PracticeParams::parse(&bytes).unwrap().flags, KNOWN_FLAGS);
-        bytes[64..68].copy_from_slice(&(KNOWN_FLAGS | (1 << 31)).to_le_bytes());
-        assert!(PracticeParams::parse(&bytes).is_none());
+    fn parse_reject_invalid_bool_values() {
+        assert!(!parse_with(|_| {}).unwrap().real_deaths);
+        assert!(parse_with(|w| w.real_deaths = 1).unwrap().real_deaths);
+        assert!(parse_with(|w| w.real_deaths = 2).is_none());
+        assert!(parse_with(|w| w.active = 2).is_none());
     }
 
     #[test]
     fn parse_reject_step_interval_outside_bounds() {
-        let mut bytes = wire_bytes(1202, 1, 0);
-        assert_eq!(PracticeParams::parse(&bytes).unwrap().step_interval, 3);
-        bytes[60..64].copy_from_slice(&0u32.to_le_bytes());
-        assert!(PracticeParams::parse(&bytes).is_none());
-        bytes[60..64].copy_from_slice(&(MAX_STEP_INTERVAL + 1).to_le_bytes());
-        assert!(PracticeParams::parse(&bytes).is_none());
-        bytes[60..64].copy_from_slice(&MAX_STEP_INTERVAL.to_le_bytes());
+        assert_eq!(parse_with(|_| {}).unwrap().step_interval, 3);
+        assert!(parse_with(|w| w.step_interval = 0).is_none());
+        assert!(parse_with(|w| w.step_interval = MAX_STEP_INTERVAL + 1).is_none());
         assert_eq!(
-            PracticeParams::parse(&bytes).unwrap().step_interval,
+            parse_with(|w| w.step_interval = MAX_STEP_INTERVAL)
+                .unwrap()
+                .step_interval,
             MAX_STEP_INTERVAL
         );
     }
 
     #[test]
     fn parse_clamp_resources() {
-        let mut bytes = wire_bytes(1202, 1, 0);
-        bytes[28..32].copy_from_slice(&99i32.to_le_bytes()); // lives
-        let params = PracticeParams::parse(&bytes).unwrap();
-        assert_eq!(params.lives, 8);
+        assert_eq!(parse_with(|w| w.lives = 99).unwrap().lives, 8);
     }
 }

@@ -1,8 +1,8 @@
 //! Reset/load state machine logic.
 
-use super::data::{rank_matches_stage, section_stage};
+use super::data::{rank_matches_stage, section_mapped, section_stage};
 use super::load::{Generation, LoadStatus};
-use super::{LiveWarp, PracticeParams};
+use super::{LiveWarp, PracticeParams, StageRecord};
 
 /// Wire codes for the observation's `reset_outcome` word describing the reset from `reset_seq`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,6 +20,8 @@ pub(crate) enum Outcome {
     FailedDifficultyMismatch = 6,
     /// A reset specified a character other than the one currently being used.
     FailedCharacterMismatch = 7,
+    /// A warp specified a `(section, phase)` that doesn't exist in the catalog.
+    FailedUnmapped = 8,
 }
 
 #[derive(Clone, Copy)]
@@ -71,6 +73,8 @@ pub(super) struct ReloadPlan {
 /// Transitions are methods that take the environment as parameters and return writes to be performed by the caller.
 pub(super) struct Lifecycle {
     reset: ResetState,
+    /// The pending reset's stage record if carried by its RESET. The value is `Some(_)` only while the reset is pending.
+    record: Option<Box<StageRecord>>,
     /// The last consumed load.
     current_load: CurrentLoad,
     /// The live warp's undo record.
@@ -81,6 +85,7 @@ impl Lifecycle {
     /// The initial state. No reset has been accepted, the generation is 0 and consumed, and there are no ECL patches to undo.
     pub(super) const INIT: Self = Self {
         reset: ResetState::Idle,
+        record: None,
         current_load: CurrentLoad {
             generation: Generation::PRE_LOAD,
             section: 0,
@@ -88,15 +93,27 @@ impl Lifecycle {
         last_warp: None,
     };
 
-    /// Accepts a decoded RESET command. Returns `false` if a previous reset is still pending (which means a protocol violation).
-    pub(super) fn accept(&mut self, seq: u32, params: PracticeParams) -> bool {
-        if matches!(
+    /// Whether a reset has been accepted and not yet resolved.
+    pub(super) fn reset_pending(&self) -> bool {
+        matches!(
             self.reset,
             ResetState::Requested { .. } | ResetState::Reloading { .. }
-        ) {
+        )
+    }
+
+    /// Accepts a decoded RESET command and its stage record.
+    /// Returns `false` if a previous reset is still pending (which means a protocol violation).
+    pub(super) fn accept(
+        &mut self,
+        seq: u32,
+        params: PracticeParams,
+        record: Option<Box<StageRecord>>,
+    ) -> bool {
+        if self.reset_pending() {
             return false;
         }
         self.reset = ResetState::Requested { seq, params };
+        self.record = record;
         true
     }
 
@@ -138,18 +155,17 @@ impl Lifecycle {
         }
 
         if params.character != current_character {
-            self.reset = ResetState::Done {
-                seq,
-                outcome: Outcome::FailedCharacterMismatch,
-            };
+            self.refuse(seq, Outcome::FailedCharacterMismatch);
+            return None;
+        }
+
+        if params.active && !section_mapped(params.section, params.phase) {
+            self.refuse(seq, Outcome::FailedUnmapped);
             return None;
         }
 
         if !params.active && !rank_matches_stage(current_stage, params.difficulty) {
-            self.reset = ResetState::Done {
-                seq,
-                outcome: Outcome::FailedDifficultyMismatch,
-            };
+            self.refuse(seq, Outcome::FailedDifficultyMismatch);
             return None;
         }
 
@@ -166,6 +182,12 @@ impl Lifecycle {
             difficulty: params.difficulty,
             arms_load: params.active,
         })
+    }
+
+    /// Resolves a requested reset without reloading, dropping its record.
+    fn refuse(&mut self, seq: u32, outcome: Outcome) {
+        self.reset = ResetState::Done { seq, outcome };
+        self.record = None;
     }
 
     /// Returns the reload's publish (a settled load of a new generation while reloading), or none if it hasn't landed yet.
@@ -191,6 +213,16 @@ impl Lifecycle {
     /// Returns the params of a reload whose publish is waiting to be consumed.
     pub(super) fn pending_consume(&self, status: LoadStatus) -> Option<PracticeParams> {
         self.published(status).map(|(params, _)| params)
+    }
+
+    /// Returns the pending reset's stage record if it carries one.
+    pub(super) fn record(&self) -> Option<&StageRecord> {
+        self.record.as_deref()
+    }
+
+    /// Takes the pending reset's stage record for its consuming tick.
+    pub(super) fn take_record(&mut self) -> Option<Box<StageRecord>> {
+        self.record.take()
     }
 
     /// Records that the input hook placed the player for the pending consume on this frame.
@@ -262,6 +294,7 @@ mod tests {
     use super::super::data::{EXTRA_DIFFICULTY, EXTRA_STAGE};
     use super::super::ecl::EclUndo;
     use super::super::test_support::{params, params_at};
+    use super::super::{RECORD_LEN, StageRecord};
     use super::{Generation, Lifecycle, LiveWarp, LoadStatus, Outcome, ReloadPlan, TickDecision};
 
     const LIVE_STAGE: u32 = 1;
@@ -285,7 +318,7 @@ mod tests {
     fn wire_reset_phases() {
         let mut lc = Lifecycle::INIT;
         assert_eq!(lc.wire(), (Generation::for_test(0), 0, Outcome::Idle, 0));
-        assert!(lc.accept(5, params(1202, 1, 0)));
+        assert!(lc.accept(5, params(1202, 1, 0), None));
         assert_eq!(lc.wire(), (Generation::for_test(0), 5, Outcome::Pending, 0));
         assert!(
             lc.try_start_reload(true, settled(0), false, LIVE_STAGE, LIVE_CHARACTER)
@@ -302,21 +335,68 @@ mod tests {
     #[test]
     fn refuse_reset_command_while_pending() {
         let mut lc = Lifecycle::INIT;
-        assert!(lc.accept(1, params(1202, 1, 0)));
-        assert!(!lc.accept(2, params(1202, 1, 0)));
+        assert!(lc.accept(1, params(1202, 1, 0), None));
+        assert!(!lc.accept(2, params(1202, 1, 0), None));
         assert!(
             lc.try_start_reload(true, settled(0), false, LIVE_STAGE, LIVE_CHARACTER)
                 .is_some()
         );
-        assert!(!lc.accept(3, params(1202, 1, 0)));
+        assert!(!lc.accept(3, params(1202, 1, 0), None));
         lc.finish_reload(Generation::for_test(1), Outcome::Applied, 1202);
-        assert!(lc.accept(4, params(1202, 1, 0)));
+        assert!(lc.accept(4, params(1202, 1, 0), None));
+    }
+
+    #[test]
+    fn reset_pending_spans_request_to_landing() {
+        let mut lc = Lifecycle::INIT;
+        assert!(!lc.reset_pending());
+        assert!(lc.accept(1, params(1202, 1, 0), None));
+        assert!(lc.reset_pending());
+        assert!(
+            lc.try_start_reload(true, settled(0), false, LIVE_STAGE, LIVE_CHARACTER)
+                .is_some()
+        );
+        assert!(lc.reset_pending());
+        lc.finish_reload(Generation::for_test(1), Outcome::Applied, 1202);
+        assert!(!lc.reset_pending());
+        assert_eq!(lc.wire().2, Outcome::Applied);
+    }
+
+    #[test]
+    fn hold_record_while_reset_pending() {
+        let record = || Some(Box::new(StageRecord([1; RECORD_LEN])));
+        let mut lc = Lifecycle::INIT;
+        assert!(lc.accept(1, params(1202, 1, 0), record()));
+        assert!(lc.record().is_some());
+        // A refused reset drops its record.
+        assert!(
+            lc.try_start_reload(true, settled(0), false, LIVE_STAGE, LIVE_CHARACTER + 1)
+                .is_none()
+        );
+        assert!(lc.record().is_none());
+
+        assert!(lc.accept(2, params(1202, 1, 0), record()));
+        // A RESET while one is pending is refused, and the pending reset keeps its record.
+        assert!(!lc.accept(3, params(1202, 1, 0), None));
+        assert!(lc.record().is_some());
+        assert!(
+            lc.try_start_reload(true, settled(0), false, LIVE_STAGE, LIVE_CHARACTER)
+                .is_some()
+        );
+        lc.mark_placed();
+        assert!(matches!(
+            lc.tick_decision(settled_armed(1)),
+            TickDecision::Consume { .. }
+        ));
+        assert!(lc.take_record().is_some());
+        lc.finish_reload(Generation::for_test(1), Outcome::Applied, 1202);
+        assert!(lc.record().is_none());
     }
 
     #[test]
     fn try_start_reload_environment_gate() {
         let mut lc = Lifecycle::INIT;
-        assert!(lc.accept(1, params(1202, 1, 0)));
+        assert!(lc.accept(1, params(1202, 1, 0), None));
         assert!(
             lc.try_start_reload(false, settled(0), false, LIVE_STAGE, LIVE_CHARACTER)
                 .is_none()
@@ -355,7 +435,7 @@ mod tests {
     #[test]
     fn vanilla_reload_spec() {
         let mut lc = Lifecycle::INIT;
-        assert!(lc.accept(1, params(0, 0, 0)));
+        assert!(lc.accept(1, params(0, 0, 0), None));
         let plan = lc
             .try_start_reload(true, settled(0), false, LIVE_STAGE, LIVE_CHARACTER)
             .expect("reload starts");
@@ -385,7 +465,7 @@ mod tests {
     #[test]
     fn observe_leave_reload_publish() {
         let mut lc = Lifecycle::INIT;
-        assert!(lc.accept(1, params(1202, 1, 0)));
+        assert!(lc.accept(1, params(1202, 1, 0), None));
         assert!(
             lc.try_start_reload(true, settled(0), false, LIVE_STAGE, LIVE_CHARACTER)
                 .is_some()
@@ -419,7 +499,7 @@ mod tests {
         lc.observe(settled(1));
         assert!(lc.last_warp.is_some());
 
-        assert!(lc.accept(1, params(1202, 1, 0)));
+        assert!(lc.accept(1, params(1202, 1, 0), None));
         assert!(
             lc.try_start_reload(true, settled(1), false, LIVE_STAGE, LIVE_CHARACTER)
                 .is_some()
@@ -434,7 +514,7 @@ mod tests {
     #[test]
     fn tick_decision_hold_until_publish() {
         let mut lc = Lifecycle::INIT;
-        assert!(lc.accept(1, params(1202, 1, 0)));
+        assert!(lc.accept(1, params(1202, 1, 0), None));
         assert!(
             lc.try_start_reload(true, settled(0), false, LIVE_STAGE, LIVE_CHARACTER)
                 .is_some()
@@ -460,7 +540,7 @@ mod tests {
     #[test]
     fn consume_follows_placement() {
         let mut lc = Lifecycle::INIT;
-        assert!(lc.accept(1, params(1202, 1, 0)));
+        assert!(lc.accept(1, params(1202, 1, 0), None));
         lc.mark_placed();
         assert!(
             lc.try_start_reload(true, settled(0), false, LIVE_STAGE, LIVE_CHARACTER)
@@ -500,7 +580,7 @@ mod tests {
     #[test]
     fn inactive_reset_refuse_incompatible_difficulty() {
         let mut lc = Lifecycle::INIT;
-        assert!(lc.accept(1, params(0, 0, 0)));
+        assert!(lc.accept(1, params(0, 0, 0), None));
         assert!(
             lc.try_start_reload(true, settled(0), false, EXTRA_STAGE, LIVE_CHARACTER)
                 .is_none()
@@ -515,14 +595,14 @@ mod tests {
             )
         );
         assert!(matches!(lc.tick_decision(settled(0)), TickDecision::Run));
-        assert!(lc.accept(2, params_at(0, 0, 0, EXTRA_DIFFICULTY.cast_signed())));
+        assert!(lc.accept(2, params_at(0, 0, 0, EXTRA_DIFFICULTY.cast_signed()), None));
         assert!(
             lc.try_start_reload(true, settled(0), false, EXTRA_STAGE, LIVE_CHARACTER)
                 .is_some()
         );
 
         let mut lc = Lifecycle::INIT;
-        assert!(lc.accept(1, params_at(0, 0, 0, EXTRA_DIFFICULTY.cast_signed())));
+        assert!(lc.accept(1, params_at(0, 0, 0, EXTRA_DIFFICULTY.cast_signed()), None));
         assert!(
             lc.try_start_reload(true, settled(0), false, LIVE_STAGE, LIVE_CHARACTER)
                 .is_none()
@@ -533,14 +613,14 @@ mod tests {
     #[test]
     fn refuse_reload_for_invalid_character() {
         let mut lc = Lifecycle::INIT;
-        assert!(lc.accept(9, params(1202, 1, 0)));
+        assert!(lc.accept(9, params(1202, 1, 0), None));
         assert!(
             lc.try_start_reload(true, settled(0), false, LIVE_STAGE, LIVE_CHARACTER + 1)
                 .is_none()
         );
 
         let mut early = Lifecycle::INIT;
-        assert!(early.accept(9, params(1202, 1, 0)));
+        assert!(early.accept(9, params(1202, 1, 0), None));
         assert!(
             early
                 .try_start_reload(false, settled(0), false, LIVE_STAGE, LIVE_CHARACTER + 1)
@@ -559,5 +639,22 @@ mod tests {
                 0
             )
         );
+    }
+
+    #[test]
+    fn refuse_reload_for_unmapped_warp() {
+        for (seq, section, phase) in [(1, 1205, 0), (2, 1202, 9)] {
+            let mut lc = Lifecycle::INIT;
+            assert!(lc.accept(seq, params(section, 1, phase), None));
+            assert!(
+                lc.try_start_reload(true, settled(0), false, LIVE_STAGE, LIVE_CHARACTER)
+                    .is_none()
+            );
+            assert_eq!(
+                lc.wire(),
+                (Generation::for_test(0), seq, Outcome::FailedUnmapped, 0)
+            );
+            assert!(matches!(lc.tick_decision(settled(0)), TickDecision::Run));
+        }
     }
 }

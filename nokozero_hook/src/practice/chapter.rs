@@ -3,7 +3,7 @@
 use super::Verdict;
 use super::load::{Generation, PerLoad, load_generation};
 use crate::addrs::{CURRENT_CHAPTER_VA, ENEMIES_SPAWNED_IN_CHAPTER_VA};
-use crate::mem::write;
+use crate::mem::{read, write};
 use crate::patch::Site;
 use crate::thread::{MainThread, MainToken};
 use std::arch::naked_asm;
@@ -36,6 +36,68 @@ impl ChapterIntent {
 
 /// The committed warp's [`ChapterIntent`].
 static SCHEDULED_INTENT: PerLoad<ChapterIntent> = PerLoad::new(ChapterIntent::NONE);
+
+/// Stage scripts set the chapter value/word on the third live frame of a load.
+const COUNT_FROM_FRAME: u32 = 3;
+
+/// Chapter word cap. (There are 81 words in total in the game.)
+const COUNTED_WORDS: usize = 256;
+
+/// Chapter load counter.
+#[derive(Clone, Copy)]
+struct Entries {
+    /// The word on the last frame counted.
+    current: Option<u32>,
+    /// The number of times a load has entered each chapter word.
+    counts: [u8; COUNTED_WORDS],
+}
+
+impl Entries {
+    const NONE: Self = Self {
+        current: None,
+        counts: [0; COUNTED_WORDS],
+    };
+
+    /// Counts a frame showing `word`. Returns whether the word differed from the previous frame's.
+    fn show(&mut self, word: u32) -> bool {
+        if self.current == Some(word) {
+            return false;
+        }
+        self.current = Some(word);
+        if let Some(count) = self.counts.get_mut(word as usize) {
+            *count = count.saturating_add(1);
+        }
+        true
+    }
+
+    /// The number of times the current word has been entered so far.
+    /// Returns 0 before any frame is counted and for words past [`COUNTED_WORDS`].
+    fn count(&self) -> u32 {
+        self.current
+            .and_then(|word| self.counts.get(word as usize))
+            .map_or(0, |&count| u32::from(count))
+    }
+}
+
+/// The current load's [`Entries`].
+static ENTRIES: PerLoad<Entries> = PerLoad::new(Entries::NONE);
+
+/// Counts the chapter word shown by the game on live stage frame `index` of the load of `generation`.
+pub(super) fn count_chapter(thread: MainThread, generation: Generation, index: u32) {
+    if index < COUNT_FROM_FRAME {
+        return;
+    }
+    // SAFETY: The chapter word is a fixed global, readable whenever a stage is live.
+    let word = unsafe { read::<u32>(CURRENT_CHAPTER_VA) };
+    ENTRIES.update(thread, generation, |entries| {
+        entries.show(word).then_some(())
+    });
+}
+
+/// How many times the load of `generation` has entered its current chapter word.
+pub(super) fn entry_count(thread: MainThread, generation: Generation) -> u32 {
+    ENTRIES.get(thread, generation).count()
+}
 
 const CHAPTER_SCORE: Site<6> = Site::new(
     0x0043_d0ad,
@@ -167,5 +229,44 @@ pub(super) unsafe fn install() {
         CHAPTER_SCORE.jmp(chapter_score_trampoline as *mut ());
         CHAPTER_SET.jmp(chapter_set_trampoline as *mut ());
         ST7_CHAPTER_BONUS.jmp(st7_chapter_bonus_trampoline as *mut ());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{COUNTED_WORDS, Entries};
+
+    #[test]
+    fn a_word_entered_again_counts_its_second_occurrence() {
+        // Stage 1 at 1.00 power: the fourth chapter times out into a second chapter 2.
+        let mut entries = Entries::NONE;
+        assert_eq!(entries.count(), 0);
+        let mut seen = Vec::new();
+        for word in [0, 0, 1, 2, 2, 4, 4, 2, 2, 41] {
+            entries.show(word);
+            seen.push(entries.count());
+        }
+        assert_eq!(seen, [1, 1, 1, 1, 1, 1, 1, 2, 2, 1]);
+    }
+
+    #[test]
+    fn only_a_change_of_word_is_an_entry() {
+        let mut entries = Entries::NONE;
+        assert!(entries.show(63));
+        assert!(!entries.show(63));
+        assert!(entries.show(64));
+        assert!(entries.show(63));
+        assert_eq!(entries.count(), 2);
+    }
+
+    #[test]
+    fn a_word_past_the_table_has_no_count() {
+        let mut entries = Entries::NONE;
+        #[expect(clippy::cast_possible_truncation)]
+        let past = COUNTED_WORDS as u32;
+        assert!(entries.show(past));
+        assert_eq!(entries.count(), 0);
+        entries.show(5);
+        assert_eq!(entries.count(), 1);
     }
 }
