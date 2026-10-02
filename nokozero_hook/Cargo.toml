@@ -11,7 +11,7 @@ license = "MIT OR Apache-2.0"
 publish = false
 
 [dependencies]
-bitflags = "2.13.1"
+bitflags = "2.13.2"
 windows = { version = "0.62", default-features = false, features = [
     "Win32_Foundation",
     "Win32_Graphics_Direct3D",
