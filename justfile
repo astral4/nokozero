@@ -3,8 +3,6 @@ hook := "--manifest-path nokozero_hook/Cargo.toml"
 build-hook:
     cargo build {{hook}} --release
 
-# `"$@"` rather than `{{ARGS}}`: an interpolation is re-split by the shell, so a game
-# directory containing a space would reach argparse as two arguments.
 [positional-arguments]
 run *ARGS: build-hook
     uv run nokozero "$@"
