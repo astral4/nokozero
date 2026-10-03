@@ -5,6 +5,14 @@ This project aims to develop agents capable of achieving LNN; i.e. playing the e
 
 Read the [setup guide](SETUP.md) for instructions on getting started!
 
+## Video showcase
+
+The following video demonstrates the agent in action.
+
+|                 [![](thumbnail.png)](https://www.youtube.com/watch?v=5AgyCF3I8Dg)                  |
+| :------------------------------------------------------------------------------------------------: |
+| [[東方] RL vs. Legacy of Lunatic Kingdom (Reimu LNN)](https://www.youtube.com/watch?v=5AgyCF3I8Dg) |
+
 ## License
 
 Licensed under either of
