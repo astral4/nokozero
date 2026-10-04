@@ -27,7 +27,7 @@ _PDEATHSIG: Final = ("setpriv", "--pdeathsig", "KILL")
 
 
 def default_hook_dll() -> Path:
-    """The hook DLL path."""
+    """Return the path of the hook DLL built by `just build-hook`."""
     return CHECKOUT / "nokozero_hook/target/i686-pc-windows-gnu/release/nokozero_hook.dll"
 
 
@@ -94,7 +94,7 @@ def check_game_dir(game_dir: Path) -> None:
 
 
 def _hook_dll_problem(dll_path: Path, detail: str) -> str:
-    """Description for a hook DLL problem."""
+    """Describe a problem with the hook DLL at `dll_path` and how to fix it."""
     ours = dll_path == default_hook_dll()
     fix = "build with `just build-hook`" if ours else "check --hook-dll"
     return f"hook DLL at {dll_path}: {detail} ({fix})"

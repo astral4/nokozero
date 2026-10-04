@@ -77,7 +77,7 @@ class Result:
         return len(self.seeds) >= self.sample
 
     def missing(self, seeds: Sequence[int]) -> list[int]:
-        """The seeds of `seeds` without a result line."""
+        """Return the seeds of `seeds` without a result line."""
         return [seed for seed in seeds if seed not in self.seeds]
 
     @property
@@ -109,7 +109,7 @@ class Result:
         return codes
 
     def row(self) -> dict[str, Any]:
-        """The result's header."""
+        """Summarize the result as its header plus outcome tallies."""
         outcomes = self.outcomes.values()
         lengths = [row["length"] for row in self.seeds.values() if "length" in row]
         counts = tally(outcomes, PREFIX_FAILED)

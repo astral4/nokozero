@@ -14,17 +14,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
-
 from jaxtyping import Array, Float  # noqa: TC002
-
-if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
-
-    import numpy.typing as npt
-
-    from nokozero.train.rollout import Inputs, Pending, Policy
-
-# ruff: noqa: F722  # jaxtyping shape strings are not forward references
 
 from nokozero.train.buffer import Batch, BoolArray, FloatArray  # noqa: TC001
 from nokozero.train.features import (
@@ -35,6 +25,15 @@ from nokozero.train.features import (
 )
 from nokozero.train.model import QNet
 from nokozero.utils import atomic_write, code_version
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Sequence
+
+    import numpy.typing as npt
+
+    from nokozero.train.rollout import Inputs, Pending, Policy
+
+# ruff: noqa: F722  # jaxtyping shape strings are not forward references
 
 jax.config.update("jax_compilation_cache_dir", str(Path.home() / ".cache" / "nokozero" / "jax"))
 
@@ -284,7 +283,9 @@ class Agent:
         ema_tau: float = 0.0002,
         trainable: bool = True,
     ) -> None:
-        """The learning rate is decayed linearly to 0.1 * lr over `decay_updates` updates.
+        """Build the networks, plus the optimizer if `trainable`.
+
+        The learning rate is decayed linearly to 0.1 * lr over `decay_updates` updates.
 
         `ema_tau` is the rate of a slow moving average of the weights kept for evaluation (`ema`).
         """

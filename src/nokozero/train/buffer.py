@@ -269,7 +269,7 @@ class TieredBuffer:
         return self.recent.size + self.archive.size
 
     def admission_probability(self) -> float:
-        """The probability that the next finished episode will enter the archive."""
+        """Return the probability that the next finished episode will enter the archive."""
         return min(1.0, self.rate / max(1, self.rows_seen))
 
     def add(self, episode: Episode, terminal_value: float | None = None) -> None:

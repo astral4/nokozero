@@ -10,7 +10,6 @@ under that action. Dueling is applied in logit space (a state logit plus mean-ce
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-
 from jaxtyping import Array, Bool, Float  # noqa: TC002
 
 # ruff: noqa: F722  # jaxtyping shape strings are not forward references

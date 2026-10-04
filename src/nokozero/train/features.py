@@ -333,7 +333,7 @@ class Featurizer:
 def _beam_offsets(
     kind: TokenType, rows: npt.NDArray[np.float32], players: npt.NDArray[np.float32]
 ) -> npt.NDArray[np.float32]:
-    """The point in each beam closest to the player."""
+    """Return the offset from each player to the closest point of its beam."""
     if kind is TokenType.SEGMENT_LASER:
         head = rows[:, [SL.HEAD_X, SL.HEAD_Y]]
         unit = _segment_units(rows[:, [SL.VEL_X, SL.VEL_Y]])
@@ -382,7 +382,7 @@ def _globals(
 
 
 def _group_starts(sorted_owner: npt.NDArray[np.intp]) -> npt.NDArray[np.intp]:
-    """The starting points of each state's run of rows in `sorted_owner`."""
+    """Return where each state's run of rows starts in `sorted_owner`."""
     return np.flatnonzero(np.r_[True, sorted_owner[1:] != sorted_owner[:-1]])
 
 
@@ -560,7 +560,7 @@ class ActionSet:
         return len(self.patterns[0])
 
     def command(self, index: int) -> bytes:
-        """The wire command for action `index`."""
+        """Return the wire command for action `index`."""
         return self._commands[index]
 
     @cached_property
@@ -587,7 +587,7 @@ def _tap_set(frames: int = 3) -> ActionSet:
 
 
 def _vertical_set() -> ActionSet:
-    """The set of actions without horizontal movement."""
+    """Build the set of actions without horizontal movement."""
     words = tuple(int(d | A.SHOOT | (A.FOCUS if focus else 0)) for focus in (0, 1) for d in (0, A.UP, A.DOWN))
     mask = int(A.UP | A.DOWN | A.FOCUS)
     return ActionSet("vertical", tuple((w,) for w in words), key_mask=mask)

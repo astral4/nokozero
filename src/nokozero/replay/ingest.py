@@ -79,7 +79,7 @@ class Job:
 
 def record_reset(stage: rpy.Stage, character: int, step_interval: int, *, faithful: bool) -> wire.ResetParams:
     """Return the RESET that starts `stage` from its record.
-    
+
     `faithful` plays the entire episode as the recorded run.
     """
     return wire.ResetParams(

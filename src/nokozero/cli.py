@@ -21,7 +21,7 @@ from nokozero.train.rollout import (
     parse_spec,
     parse_target,
 )
-from nokozero.utils import atomic_write, check_writable, code_version, keep_source, print_row
+from nokozero.utils import atomic_write, check_writable, code_version, print_row
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Mapping
@@ -148,9 +148,9 @@ def _synthesize(args: argparse.Namespace) -> int:
     traces: dict[int, list[StageTrace]] = {}
     result = _play(args, stages, args.seeds, traces)
     written = unwritten = 0
-    for seed, result in sorted(result.per_seed.items()):
-        if result != "clear":
-            print(f"seed {seed}: {result}")  # noqa: T201
+    for seed, outcome in sorted(result.per_seed.items()):
+        if outcome != "clear":
+            print(f"seed {seed}: {outcome}")  # noqa: T201
             continue
         try:
             data = synth.synthesize(traces[seed], template, name=args.name)
@@ -285,7 +285,7 @@ def _parser() -> argparse.ArgumentParser:  # noqa: PLR0915
             "--step-timeout",
             type=float,
             default=EnvConfig.step_timeout,
-            help="number of seconds that an instance can take to answer a command before it is declared dead"
+            help="number of seconds that an instance can take to answer a command before it is declared dead",
         )
         sub.add_argument(
             "--startup-timeout",
@@ -646,8 +646,8 @@ def main(argv: list[str] | None = None) -> int:
         hook_dll: Path | None = getattr(args, "hook_dll", None)
         if hook_dll is not None:
             hook_image(hook_dll)
+        # Pin the code version before a long run can outlast the checkout's state.
         code_version()
-        keep_source()
         run: Callable[[argparse.Namespace], int] = args.run
         return run(args)
     except (ValueError, OSError, RuntimeError) as failure:

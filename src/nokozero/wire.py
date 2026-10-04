@@ -340,10 +340,7 @@ class ResetParams:
             msg = f"player position ({self.player_x}, {self.player_y}) is not finite"
             raise ValueError(msg)
         if self.active and (stage_of(self.section) == EXTRA_STAGE) != (self.difficulty == EXTRA_DIFFICULTY):
-            msg = (
-                f"section {self.section} with difficulty {self.difficulty}: "
-                "Extra sections require difficulty 4"
-            )
+            msg = f"section {self.section} with difficulty {self.difficulty}: Extra sections require difficulty 4"
             raise ValueError(msg)
 
     def _check_resources(self) -> None:
