@@ -84,7 +84,7 @@ class Stream:
     def starts(self) -> Iterator[Start]:
         return self._starts
 
-    def observe(self, episode: Episode) -> None:=
+    def observe(self, episode: Episode) -> None:
         del episode
 
     def row(self) -> Row:
